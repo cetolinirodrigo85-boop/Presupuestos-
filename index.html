@@ -403,8 +403,8 @@ function isSameMonth(iso, year, month){
    La anon key es pública a propósito: la seguridad la da RLS
    (cada policy exige user_id = auth.uid()), no el secreto.
    ------------------------------------------------------------ */
-const SUPABASE_URL = 'https://TU-PROYECTO.supabase.co';
-const SUPABASE_ANON_KEY = 'TU-ANON-KEY';
+const SUPABASE_URL = 'https://lgynvzcdhesvfgbfgbgq.supabase.co';
+const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImxneW52emNkaGVzdmZnYmZnYmdxIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODg3MjAyNDIsImV4cCI6MjEwNDI5NjI0Mn0.gi0NdyTMT0Gqx5h8oc-hUHBA2R8c7uMbpbKsCQ3AwjQ';
 const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
 let currentUserId = null;
