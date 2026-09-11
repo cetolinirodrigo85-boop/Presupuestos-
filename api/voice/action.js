@@ -13,8 +13,8 @@ const {
   sumExpensesForCategoryThisMonth, sumIncomeThisMonth,
   getEmergencyFund, addToSavingsGoal,
   savePendingAction, getPendingAction, resolvePendingAction,
-} = require('./_lib/store');
-const { money, distribuirDineroExtra } = require('./_lib/engine');
+} = require('./lib/store');
+const { money, distribuirDineroExtra } = require('./lib/engine');
 
 async function aplicarGasto({ amount, categoryName, description }) {
   const cat = await findOrCreateCategory(categoryName);
@@ -127,3 +127,4 @@ module.exports = async (req, res) => {
     default: return res.status(400).json({ error: 'unknown_type', mensaje: 'Tipo de acción no reconocido.' });
   }
 };
+
