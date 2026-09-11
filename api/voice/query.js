@@ -13,8 +13,8 @@
 // plan Hobby de Vercel permite como máximo 12 funciones serverless
 // por deployment.
 
-const { getDB, checkAuth } = require('./_lib/store');
-const E = require('./_lib/engine');
+const { getDB, checkAuth } = require('./lib/store');
+const E = require('./lib/engine');
 
 module.exports = async (req, res) => {
   if (req.method !== 'GET') return res.status(405).json({ error: 'method_not_allowed' });
