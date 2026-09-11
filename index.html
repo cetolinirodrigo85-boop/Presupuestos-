@@ -2,7 +2,7 @@
 <html lang="es-AR">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
 <title>Rodri CFO — Centro de control financiero</title>
 <link rel="manifest" href="/manifest.webmanifest">
 <meta name="theme-color" content="#0E1013">
@@ -116,7 +116,7 @@
   .field label{display:block;font-size:12.5px;color:var(--text-dim);margin-bottom:5px;}
   .field input,.field select{
     width:100%;background:var(--surface-2);border:1px solid var(--border);color:var(--text);
-    border-radius:var(--radius-sm);padding:10px 12px;font-size:15px;font-family:'Inter';
+    border-radius:var(--radius-sm);padding:10px 12px;font-size:16px;font-family:'Inter';
   }
   .field input:focus,.field select:focus{outline:2px solid var(--gold-dim);outline-offset:1px;}
   .panel{display:none;}
@@ -688,8 +688,8 @@ function renderMovimientos(){
 
   const cuentasEl = document.getElementById('cuentasLista');
   cuentasEl.innerHTML = DB.accounts.filter(a=>a.isActive).map(a=>`
-    <div class="row">
-      <div><div class="r-name">${a.name}</div><div class="r-sub">${a.type.replace('_',' ')}</div></div>
+    <div class="row" style="cursor:pointer;" onclick="abrirEdicionCuenta('${a.id}')">
+      <div><div class="r-name">${a.name}</div><div class="r-sub">${a.type.replace('_',' ')} · tocar para editar</div></div>
       <div class="r-amount num">${money(a.balanceTotal)}</div>
     </div>`).join('') || '<div class="empty">No hay cuentas cargadas.</div>';
 
@@ -934,6 +934,59 @@ function calcularProyeccion(){
     <div class="card" style="margin-top:10px;margin-bottom:0;background:var(--surface-2);">
       ${puntos.map(p=>`<div class="row"><div class="r-name">${p.anios} año${p.anios>1?'s':''}</div><div style="text-align:right;"><div class="r-amount num">${money(p.nominal)}</div><div class="faint">${money(p.real)} ajustado a inflación</div></div></div>`).join('')}
     </div>`;
+}
+
+/* ------------------------------------------------------------
+   EDITAR UNA CUENTA (nombre, tipo, saldo)
+   ------------------------------------------------------------ */
+async function abrirEdicionCuenta(id){
+  const a = DB.accounts.find(x=>x.id===id);
+  if(!a) return;
+  const panel = document.getElementById('quickFormPanel');
+  const title = document.getElementById('quickFormTitle');
+  const body = document.getElementById('quickFormBody');
+  const saveBtn = document.getElementById('quickFormSave');
+  const delBtn = document.getElementById('quickFormDelete');
+  panel.style.display = 'block';
+  delBtn.style.display = 'block';
+
+  title.textContent = 'Editar cuenta';
+  body.innerHTML = `
+    <div class="field"><label>Nombre</label><input id="editNombreCuenta" value="${a.name}"></div>
+    <div class="field"><label>Tipo</label>
+      <select id="editTipoCuenta">
+        <option value="efectivo">Efectivo</option>
+        <option value="mercado_pago">Mercado Pago</option>
+        <option value="banco">Banco</option>
+        <option value="billetera_virtual">Billetera virtual</option>
+        <option value="inversion">Inversión</option>
+        <option value="otra">Otra</option>
+      </select></div>
+    <div class="field"><label>Saldo actual</label><input type="number" id="editSaldoCuenta" value="${a.balanceTotal}"></div>`;
+  document.getElementById('editTipoCuenta').value = a.type;
+
+  saveBtn.onclick = async ()=>{
+    const nombre = document.getElementById('editNombreCuenta').value.trim();
+    const tipo = document.getElementById('editTipoCuenta').value;
+    const saldo = parseFloat(document.getElementById('editSaldoCuenta').value);
+    if(!nombre){ toast('Poné un nombre'); return; }
+    if(isNaN(saldo)){ toast('Ingresá un saldo válido'); return; }
+
+    const { error } = await sb.from('accounts').update({
+      name: nombre, type: tipo, balance_total: saldo
+    }).eq('id', id);
+    if(error){ toast('No se pudo actualizar la cuenta'); return; }
+
+    a.name = nombre; a.type = tipo; a.balanceTotal = saldo;
+    closeQuickForm(); toast('Cuenta actualizada'); renderAll();
+  };
+
+  delBtn.onclick = async ()=>{
+    const { error } = await sb.from('accounts').update({ is_active: false }).eq('id', id);
+    if(error){ toast('No se pudo desactivar la cuenta'); return; }
+    a.isActive = false;
+    closeQuickForm(); toast('Cuenta desactivada'); renderAll();
+  };
 }
 
 /* ------------------------------------------------------------
