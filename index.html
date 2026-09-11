@@ -343,6 +343,7 @@
       <button class="btn ghost" onclick="closeQuickForm()">Cancelar</button>
       <button class="btn primary" id="quickFormSave">Guardar</button>
     </div>
+    <button class="btn danger-outline" id="quickFormDelete" style="display:none;margin-top:8px;">Eliminar</button>
   </div>
 </div>
 
@@ -686,15 +687,15 @@ function renderMovimientos(){
     </div>`).join('') || '<div class="empty">No hay cuentas cargadas.</div>';
 
   const historial = [
-    ...DB.expenses.map(e=>({tipo:'gasto', fecha:e.occurredOn, monto:e.amount, desc: (DB.expenseCategories.find(c=>c.id===e.categoryId)||{}).name || e.description || 'Gasto'})),
-    ...DB.incomeTransactions.map(t=>({tipo:'ingreso', fecha:t.occurredOn, monto:t.amount, desc:(DB.incomeSources.find(s=>s.id===t.incomeSourceId)||{}).name || 'Ingreso'})),
-    ...DB.transfers.map(t=>({tipo:'transferencia', fecha:t.occurredOn, monto:t.amount, desc:'Transferencia'}))
+    ...DB.expenses.map(e=>({tipo:'gasto', id:e.id, fecha:e.occurredOn, monto:e.amount, desc: (DB.expenseCategories.find(c=>c.id===e.categoryId)||{}).name || e.description || 'Gasto'})),
+    ...DB.incomeTransactions.map(t=>({tipo:'ingreso', id:t.id, fecha:t.occurredOn, monto:t.amount, desc:(DB.incomeSources.find(s=>s.id===t.incomeSourceId)||{}).name || 'Ingreso'})),
+    ...DB.transfers.map(t=>({tipo:'transferencia', id:t.id, fecha:t.occurredOn, monto:t.amount, desc:'Transferencia'}))
   ].sort((a,b)=> b.fecha.localeCompare(a.fecha)).slice(0,12);
 
   document.getElementById('historialLista').innerHTML = historial.length ? historial.map(h=>{
     const signo = h.tipo==='ingreso' ? '+' : (h.tipo==='gasto' ? '-' : '');
     const cls = h.tipo==='ingreso' ? 'pos' : (h.tipo==='gasto' ? 'neg' : '');
-    return `<div class="row"><div><div class="r-name">${h.desc}</div><div class="r-sub">${h.fecha}</div></div><div class="r-amount num ${cls}">${signo}${money(h.monto)}</div></div>`;
+    return `<div class="row" style="cursor:pointer;" onclick="abrirEdicionMovimiento('${h.tipo}','${h.id}')"><div><div class="r-name">${h.desc}</div><div class="r-sub">${h.fecha} · tocar para editar</div></div><div class="r-amount num ${cls}">${signo}${money(h.monto)}</div></div>`;
   }).join('') : '<div class="empty">Todavía no hay movimientos.</div>';
 }
 
@@ -929,9 +930,181 @@ function calcularProyeccion(){
 }
 
 /* ------------------------------------------------------------
+   EDITAR / ELIMINAR UN MOVIMIENTO YA CARGADO
+   ------------------------------------------------------------ */
+async function abrirEdicionMovimiento(tipo, id){
+  const panel = document.getElementById('quickFormPanel');
+  const title = document.getElementById('quickFormTitle');
+  const body = document.getElementById('quickFormBody');
+  const saveBtn = document.getElementById('quickFormSave');
+  const delBtn = document.getElementById('quickFormDelete');
+  panel.style.display = 'block';
+  delBtn.style.display = 'block';
+
+  if(tipo === 'gasto'){
+    const e = DB.expenses.find(x=>x.id===id);
+    if(!e) return;
+    title.textContent = 'Editar gasto';
+    body.innerHTML = `
+      <div class="field"><label>Monto</label><input type="number" id="editMonto" value="${e.amount}"></div>
+      <div class="field"><label>Categoría</label><select id="editCategoria"></select></div>
+      <div class="field"><label>Cuenta</label><select id="editCuenta"></select></div>
+      <div class="field"><label>Descripción</label><input type="text" id="editDesc" value="${e.description||''}"></div>`;
+    fillSelect('editCategoria', DB.expenseCategories, c=>c.name);
+    fillSelect('editCuenta', DB.accounts.filter(a=>a.isActive), a=>a.name);
+    document.getElementById('editCategoria').value = e.categoryId;
+    document.getElementById('editCuenta').value = e.accountId;
+
+    saveBtn.onclick = async ()=>{
+      const nuevoMonto = parseFloat(document.getElementById('editMonto').value);
+      const nuevaCategoria = document.getElementById('editCategoria').value;
+      const nuevaCuenta = document.getElementById('editCuenta').value;
+      const nuevaDesc = document.getElementById('editDesc').value;
+      if(!nuevoMonto || nuevoMonto<=0){ toast('Ingresá un monto válido'); return; }
+
+      const cuentaVieja = DB.accounts.find(a=>a.id===e.accountId);
+      if(cuentaVieja){
+        cuentaVieja.balanceTotal = round2(cuentaVieja.balanceTotal + e.amount);
+        await sb.from('accounts').update({ balance_total: cuentaVieja.balanceTotal }).eq('id', cuentaVieja.id);
+      }
+      const cuentaNueva = DB.accounts.find(a=>a.id===nuevaCuenta);
+      if(cuentaNueva){
+        cuentaNueva.balanceTotal = round2(cuentaNueva.balanceTotal - nuevoMonto);
+        await sb.from('accounts').update({ balance_total: cuentaNueva.balanceTotal }).eq('id', cuentaNueva.id);
+      }
+
+      const { error } = await sb.from('expenses').update({
+        amount: nuevoMonto, category_id: nuevaCategoria, account_id: nuevaCuenta, description: nuevaDesc || null
+      }).eq('id', id);
+      if(error){ toast('No se pudo editar el gasto'); return; }
+
+      e.amount = nuevoMonto; e.categoryId = nuevaCategoria; e.accountId = nuevaCuenta; e.description = nuevaDesc;
+      closeQuickForm(); toast('Gasto actualizado'); renderAll();
+    };
+
+    delBtn.onclick = async ()=>{
+      const cuenta = DB.accounts.find(a=>a.id===e.accountId);
+      if(cuenta){
+        cuenta.balanceTotal = round2(cuenta.balanceTotal + e.amount);
+        await sb.from('accounts').update({ balance_total: cuenta.balanceTotal }).eq('id', cuenta.id);
+      }
+      const { error } = await sb.from('expenses').delete().eq('id', id);
+      if(error){ toast('No se pudo eliminar'); return; }
+      DB.expenses = DB.expenses.filter(x=>x.id!==id);
+      closeQuickForm(); toast('Gasto eliminado'); renderAll();
+    };
+  }
+
+  if(tipo === 'ingreso'){
+    const t = DB.incomeTransactions.find(x=>x.id===id);
+    if(!t) return;
+    title.textContent = 'Editar ingreso';
+    body.innerHTML = `
+      <div class="field"><label>Monto</label><input type="number" id="editMonto" value="${t.amount}"></div>
+      <div class="field"><label>Fuente</label><select id="editFuente"></select></div>
+      <div class="field"><label>Cuenta</label><select id="editCuenta"></select></div>`;
+    fillSelect('editFuente', DB.incomeSources, s=>s.name);
+    fillSelect('editCuenta', DB.accounts.filter(a=>a.isActive), a=>a.name);
+    document.getElementById('editFuente').value = t.incomeSourceId;
+    document.getElementById('editCuenta').value = t.accountId;
+
+    saveBtn.onclick = async ()=>{
+      const nuevoMonto = parseFloat(document.getElementById('editMonto').value);
+      const nuevaFuente = document.getElementById('editFuente').value;
+      const nuevaCuenta = document.getElementById('editCuenta').value;
+      if(!nuevoMonto || nuevoMonto<=0){ toast('Ingresá un monto válido'); return; }
+
+      const cuentaVieja = DB.accounts.find(a=>a.id===t.accountId);
+      if(cuentaVieja){
+        cuentaVieja.balanceTotal = round2(cuentaVieja.balanceTotal - t.amount);
+        await sb.from('accounts').update({ balance_total: cuentaVieja.balanceTotal }).eq('id', cuentaVieja.id);
+      }
+      const cuentaNueva = DB.accounts.find(a=>a.id===nuevaCuenta);
+      if(cuentaNueva){
+        cuentaNueva.balanceTotal = round2(cuentaNueva.balanceTotal + nuevoMonto);
+        await sb.from('accounts').update({ balance_total: cuentaNueva.balanceTotal }).eq('id', cuentaNueva.id);
+      }
+
+      const { error } = await sb.from('income_transactions').update({
+        amount: nuevoMonto, income_source_id: nuevaFuente, account_id: nuevaCuenta
+      }).eq('id', id);
+      if(error){ toast('No se pudo editar el ingreso'); return; }
+
+      t.amount = nuevoMonto; t.incomeSourceId = nuevaFuente; t.accountId = nuevaCuenta;
+      closeQuickForm(); toast('Ingreso actualizado'); renderAll();
+    };
+
+    delBtn.onclick = async ()=>{
+      const cuenta = DB.accounts.find(a=>a.id===t.accountId);
+      if(cuenta){
+        cuenta.balanceTotal = round2(cuenta.balanceTotal - t.amount);
+        await sb.from('accounts').update({ balance_total: cuenta.balanceTotal }).eq('id', cuenta.id);
+      }
+      const { error } = await sb.from('income_transactions').delete().eq('id', id);
+      if(error){ toast('No se pudo eliminar'); return; }
+      DB.incomeTransactions = DB.incomeTransactions.filter(x=>x.id!==id);
+      closeQuickForm(); toast('Ingreso eliminado'); renderAll();
+    };
+  }
+
+  if(tipo === 'transferencia'){
+    const tr = DB.transfers.find(x=>x.id===id);
+    if(!tr) return;
+    title.textContent = 'Editar transferencia';
+    body.innerHTML = `
+      <div class="field"><label>Monto</label><input type="number" id="editMonto" value="${tr.amount}"></div>
+      <div class="field"><label>Desde</label><select id="editDesde"></select></div>
+      <div class="field"><label>Hacia</label><select id="editHacia"></select></div>`;
+    fillSelect('editDesde', DB.accounts.filter(a=>a.isActive), a=>a.name);
+    fillSelect('editHacia', DB.accounts.filter(a=>a.isActive), a=>a.name);
+    document.getElementById('editDesde').value = tr.fromAccountId;
+    document.getElementById('editHacia').value = tr.toAccountId;
+
+    saveBtn.onclick = async ()=>{
+      const nuevoMonto = parseFloat(document.getElementById('editMonto').value);
+      const nuevoDesde = document.getElementById('editDesde').value;
+      const nuevoHacia = document.getElementById('editHacia').value;
+      if(!nuevoMonto || nuevoMonto<=0){ toast('Ingresá un monto válido'); return; }
+      if(nuevoDesde===nuevoHacia){ toast('Elegí cuentas distintas'); return; }
+
+      const a1 = DB.accounts.find(a=>a.id===tr.fromAccountId);
+      const a2 = DB.accounts.find(a=>a.id===tr.toAccountId);
+      if(a1){ a1.balanceTotal = round2(a1.balanceTotal + tr.amount); await sb.from('accounts').update({ balance_total:a1.balanceTotal }).eq('id', a1.id); }
+      if(a2){ a2.balanceTotal = round2(a2.balanceTotal - tr.amount); await sb.from('accounts').update({ balance_total:a2.balanceTotal }).eq('id', a2.id); }
+
+      const n1 = DB.accounts.find(a=>a.id===nuevoDesde);
+      const n2 = DB.accounts.find(a=>a.id===nuevoHacia);
+      if(n1){ n1.balanceTotal = round2(n1.balanceTotal - nuevoMonto); await sb.from('accounts').update({ balance_total:n1.balanceTotal }).eq('id', n1.id); }
+      if(n2){ n2.balanceTotal = round2(n2.balanceTotal + nuevoMonto); await sb.from('accounts').update({ balance_total:n2.balanceTotal }).eq('id', n2.id); }
+
+      const { error } = await sb.from('transfers').update({
+        amount: nuevoMonto, from_account_id: nuevoDesde, to_account_id: nuevoHacia
+      }).eq('id', id);
+      if(error){ toast('No se pudo editar la transferencia'); return; }
+
+      tr.amount = nuevoMonto; tr.fromAccountId = nuevoDesde; tr.toAccountId = nuevoHacia;
+      closeQuickForm(); toast('Transferencia actualizada'); renderAll();
+    };
+
+    delBtn.onclick = async ()=>{
+      const a1 = DB.accounts.find(a=>a.id===tr.fromAccountId);
+      const a2 = DB.accounts.find(a=>a.id===tr.toAccountId);
+      if(a1){ a1.balanceTotal = round2(a1.balanceTotal + tr.amount); await sb.from('accounts').update({ balance_total:a1.balanceTotal }).eq('id', a1.id); }
+      if(a2){ a2.balanceTotal = round2(a2.balanceTotal - tr.amount); await sb.from('accounts').update({ balance_total:a2.balanceTotal }).eq('id', a2.id); }
+
+      const { error } = await sb.from('transfers').delete().eq('id', id);
+      if(error){ toast('No se pudo eliminar'); return; }
+      DB.transfers = DB.transfers.filter(x=>x.id!==id);
+      closeQuickForm(); toast('Transferencia eliminada'); renderAll();
+    };
+  }
+}
+
+/* ------------------------------------------------------------
    QUICK FORM MODAL (cuenta / cuota / meta / inversión)
    ------------------------------------------------------------ */
 function openQuickForm(kind){
+  document.getElementById('quickFormDelete').style.display = 'none';
   if(kind==='gasto'){ goTab('movimientos'); setMovTipo('gasto'); return; }
   if(kind==='ingreso'){ goTab('movimientos'); setMovTipo('ingreso'); return; }
 
@@ -1042,7 +1215,7 @@ function openQuickForm(kind){
     };
   }
 }
-function closeQuickForm(){ document.getElementById('quickFormPanel').style.display='none'; }
+function closeQuickForm(){ document.getElementById('quickFormPanel').style.display='none'; document.getElementById('quickFormDelete').style.display='none'; }
 
 /* ------------------------------------------------------------
    RENDER GLOBAL
@@ -1060,3 +1233,5 @@ function renderAll(){
 </script>
 </body>
 </html>
+
+  
