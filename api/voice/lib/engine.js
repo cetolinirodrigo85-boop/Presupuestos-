@@ -19,7 +19,17 @@ function calcularDineroDisponible(db) {
   const saldoTotal = sum(activas.map((a) => a.balanceTotal));
   const saldoReservado = sum(activas.map((a) => a.balanceReserved));
   const saldoInvertido = sum(activas.map((a) => a.balanceInvested));
-  const gastosFijos = sum(db.recurringExpenses.filter((r) => r.isActive).map((r) => r.amount));
+
+  const now = new Date();
+  const gastosDelMesActual = gastosDelMes(db, now.getFullYear(), now.getMonth() + 1);
+
+  const gastosFijos = sum(db.recurringExpenses.filter((r) => r.isActive).map((r) => {
+    const cat = db.expenseCategories.find((c) => c.name.toLowerCase() === r.name.toLowerCase());
+    if (!cat) return r.amount;
+    const yaPagado = sum(gastosDelMesActual.filter((e) => e.categoryId === cat.id).map((e) => e.amount));
+    return Math.max(0, r.amount - yaPagado);
+  }));
+
   const cuotas = sum(db.installments.filter((i) => !i.isCompleted).map((i) => i.installmentAmount));
   const saldoComprometido = gastosFijos + cuotas;
   const saldoDisponible = saldoTotal - saldoReservado - saldoInvertido;
