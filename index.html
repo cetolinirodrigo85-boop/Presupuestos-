@@ -471,7 +471,7 @@ async function cargarDatos(){
     expenseCategories: (expenseCategories.data||[]).map(c=>({ id:c.id, name:c.name, monthlyBudget: c.monthly_budget!=null?Number(c.monthly_budget):null, isFixed:c.is_fixed })),
     expenses: (expenses.data||[]).map(e=>({ id:e.id, categoryId:e.category_id, accountId:e.account_id, amount:Number(e.amount||0), description:e.description, occurredOn:e.occurred_on })),
     recurringExpenses: (recurringExpenses.data||[]).map(r=>({ id:r.id, name:r.name, amount:Number(r.amount||0), dayOfMonth:r.day_of_month, isActive:r.is_active })),
-    installments: (installments.data||[]).map(i=>({ id:i.id, name:i.name, installmentAmount:Number(i.installment_amount||0), installmentsTotal:Number(i.installments_total||0), installmentsPaid:Number(i.installments_paid||0), isCompleted:i.is_completed })),
+    installments: (installments.data||[]).map(i=>({ id:i.id, name:i.name, installmentAmount:Number(i.installment_amount||0), installmentsTotal:Number(i.installments_total||0), installmentsPaid:Number(i.installments_paid||0), isCompleted:i.is_completed, nextDueDate:i.next_due_date })),
     transfers: (transfers.data||[]).map(t=>({ id:t.id, fromAccountId:t.from_account_id, toAccountId:t.to_account_id, amount:Number(t.amount||0), occurredOn:t.occurred_on })),
     savingsGoals: (savingsGoals.data||[]).map(g=>({ id:g.id, kind:g.kind, name:g.name, targetAmount:Number(g.target_amount||0), currentAmount:Number(g.current_amount||0), priority:g.priority })),
     investments: (investments.data||[]).map(i=>({ id:i.id, name:i.name, assetType:i.asset_type, quantity:Number(i.quantity||0), avgPurchasePrice: i.avg_purchase_price!=null?Number(i.avg_purchase_price):0 })),
@@ -482,6 +482,15 @@ async function cargarDatos(){
   const { data } = await sb.auth.getSession();
   if(data.session){ await entrarConSesion(data.session); }
 })();
+
+/* Recargar datos cada vez que se vuelve a la app (por ejemplo,
+   después de registrar algo por Siri desde el atajo). */
+document.addEventListener('visibilitychange', async ()=>{
+  if(document.visibilityState === 'visible' && currentUserId){
+    await cargarDatos();
+    renderAll();
+  }
+});
 
 /* ------------------------------------------------------------
    MOTOR FINANCIERO
@@ -503,7 +512,12 @@ function calcularDineroDisponible(db){
     return Math.max(0, r.amount - yaPagado);
   }));
 
-  const cuotas = sum(db.installments.filter(i=>!i.isCompleted).map(i=>i.installmentAmount));
+  const finDeMes = new Date(year, month, 0).toISOString().slice(0,10);
+  const cuotas = sum(db.installments.filter(i=>!i.isCompleted).filter(i=>{
+    // si ya se pagó la de este mes, next_due_date apunta al mes que viene
+    if(!i.nextDueDate) return true;
+    return i.nextDueDate <= finDeMes;
+  }).map(i=>i.installmentAmount));
   const saldoComprometido = gastosFijos + cuotas;
   const saldoDisponible = saldoTotal - saldoReservado - saldoInvertido;
   const saldoDisponibleReal = saldoDisponible - saldoComprometido;
@@ -817,12 +831,43 @@ async function pagarCuota(id){
   inst.installmentsPaid++;
   if(inst.installmentsPaid >= inst.installmentsTotal){ inst.isCompleted = true; }
 
+  const hoy = new Date();
+  const proxVenc = new Date(hoy.getFullYear(), hoy.getMonth()+1, 1).toISOString().slice(0,10);
+
   const { error } = await sb.from('installments').update({
-    installments_paid: inst.installmentsPaid, is_completed: inst.isCompleted
+    installments_paid: inst.installmentsPaid, is_completed: inst.isCompleted, next_due_date: proxVenc
   }).eq('id', id);
   if(error){ toast('No se pudo registrar el pago'); return; }
+  inst.nextDueDate = proxVenc;
 
   const acc = DB.accounts[0];
+
+  // Registrar el pago como gasto real, para que aparezca en el
+  // historial y cuente en el presupuesto de su categoría.
+  let cat = DB.expenseCategories.find(c => c.name.toLowerCase() === inst.name.toLowerCase()
+    || c.name.toLowerCase() === ('cuota ' + inst.name).toLowerCase());
+  if(!cat){
+    const { data: nuevaCat } = await sb.from('expense_categories').insert({
+      user_id: currentUserId, name: 'Cuota ' + inst.name, monthly_budget: inst.installmentAmount, is_fixed: true
+    }).select().single();
+    if(nuevaCat){
+      cat = { id: nuevaCat.id, name: nuevaCat.name, monthlyBudget: Number(nuevaCat.monthly_budget||0), isFixed: nuevaCat.is_fixed };
+      DB.expenseCategories.push(cat);
+    }
+  }
+
+  if(cat){
+    const { data: gasto } = await sb.from('expenses').insert({
+      user_id: currentUserId, category_id: cat.id, account_id: acc ? acc.id : null,
+      amount: inst.installmentAmount, description: `Cuota ${inst.installmentsPaid} de ${inst.installmentsTotal}`,
+      occurred_on: todayISO()
+    }).select().single();
+    if(gasto){
+      DB.expenses.push({ id:gasto.id, categoryId:cat.id, accountId: acc?acc.id:null,
+        amount: inst.installmentAmount, description: gasto.description, occurredOn: gasto.occurred_on });
+    }
+  }
+
   if(acc){
     acc.balanceTotal = round2(acc.balanceTotal - inst.installmentAmount);
     await sb.from('accounts').update({ balance_total: acc.balanceTotal }).eq('id', acc.id);
