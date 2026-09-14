@@ -339,6 +339,31 @@
       <div class="faint" style="margin-top:10px;">Esto es una simulación con supuestos fijos, no una garantía de rendimiento.</div>
     </div>
   </section>
+
+  <!-- ============ AJUSTES ============ -->
+  <section class="tabpage" id="page-ajustes">
+    <div class="card">
+      <div class="card-title">Gastos fijos mensuales <small class="util-link" onclick="openQuickForm('gastofijo')">+ agregar</small></div>
+      <div class="faint" style="margin-bottom:10px;">Es lo que figura como "comprometido" cada mes, hasta que registrás el pago.</div>
+      <div id="gastosFijosLista"></div>
+    </div>
+
+    <div class="card">
+      <div class="card-title">Categorías y presupuestos <small class="util-link" onclick="openQuickForm('categoria')">+ agregar</small></div>
+      <div id="categoriasLista"></div>
+    </div>
+
+    <div class="card">
+      <div class="card-title">Fuentes de ingreso <small class="util-link" onclick="openQuickForm('fuente')">+ agregar</small></div>
+      <div id="fuentesLista"></div>
+    </div>
+
+    <div class="card">
+      <div class="card-title">Empezar de cero</div>
+      <div class="faint" style="margin-bottom:12px;">Borra todos los movimientos, deja los saldos y el fondo de emergencia en $0 y reinicia las cuotas. Tus cuentas, categorías y gastos fijos se mantienen.</div>
+      <button class="btn danger-outline" onclick="reiniciarTodo()">Reiniciar todos los montos a cero</button>
+    </div>
+  </section>
 </div>
 
 <!-- ============ FORM MODAL GENÉRICO (cuenta / cuota / meta / inversión) ============ -->
@@ -374,6 +399,10 @@
   <button data-tab="simulador" onclick="goTab('simulador')">
     <svg viewBox="0 0 24 24"><path d="M4 19V9m7 10V4m7 15v-7"/></svg>
     Simular
+  </button>
+  <button data-tab="ajustes" onclick="goTab('ajustes')">
+    <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M12 2v3m0 14v3M2 12h3m14 0h3M5 5l2 2m10 10l2 2M19 5l-2 2M7 17l-2 2"/></svg>
+    Ajustes
   </button>
 </nav>
 
@@ -882,6 +911,136 @@ async function pagarCuota(id){
 }
 
 /* ------------------------------------------------------------
+   RENDER: AJUSTES
+   ------------------------------------------------------------ */
+function renderAjustes(){
+  const fijos = DB.recurringExpenses.filter(r=>r.isActive);
+  document.getElementById('gastosFijosLista').innerHTML = fijos.length ? fijos.map(r=>`
+    <div class="row" style="cursor:pointer;" onclick="abrirEdicionGastoFijo('${r.id}')">
+      <div><div class="r-name">${r.name}</div><div class="r-sub">tocar para editar</div></div>
+      <div class="r-amount num">${money(r.amount)}</div>
+    </div>`).join('') : '<div class="empty">No tenés gastos fijos. El comprometido queda en $0.</div>';
+
+  document.getElementById('categoriasLista').innerHTML = DB.expenseCategories.length ? DB.expenseCategories.map(c=>`
+    <div class="row" style="cursor:pointer;" onclick="abrirEdicionCategoria('${c.id}')">
+      <div><div class="r-name">${c.name}</div><div class="r-sub">tocar para editar</div></div>
+      <div class="r-amount num">${c.monthlyBudget ? money(c.monthlyBudget) : '—'}</div>
+    </div>`).join('') : '<div class="empty">No hay categorías.</div>';
+
+  document.getElementById('fuentesLista').innerHTML = DB.incomeSources.length ? DB.incomeSources.map(s=>`
+    <div class="row" style="cursor:pointer;" onclick="abrirEdicionFuente('${s.id}')">
+      <div><div class="r-name">${s.name}</div><div class="r-sub">tocar para editar</div></div>
+    </div>`).join('') : '<div class="empty">No hay fuentes de ingreso.</div>';
+}
+
+async function abrirEdicionGastoFijo(id){
+  const r = DB.recurringExpenses.find(x=>x.id===id);
+  if(!r) return;
+  const panel = document.getElementById('quickFormPanel');
+  document.getElementById('quickFormTitle').textContent = 'Editar gasto fijo';
+  document.getElementById('quickFormBody').innerHTML = `
+    <div class="field"><label>Nombre</label><input id="efNombre" value="${r.name}"></div>
+    <div class="field"><label>Monto mensual</label><input type="number" id="efMonto" value="${r.amount}"></div>
+    <div class="field"><label>Día de vencimiento</label><input type="number" id="efDia" value="${r.dayOfMonth||1}"></div>`;
+  panel.style.display='block';
+  const delBtn = document.getElementById('quickFormDelete');
+  delBtn.style.display='block';
+
+  document.getElementById('quickFormSave').onclick = async ()=>{
+    const name = document.getElementById('efNombre').value.trim();
+    const amount = parseFloat(document.getElementById('efMonto').value);
+    const dia = parseInt(document.getElementById('efDia').value) || 1;
+    if(!name || isNaN(amount)){ toast('Completá nombre y monto'); return; }
+    const { error } = await sb.from('recurring_expenses').update({ name, amount, day_of_month: dia }).eq('id', id);
+    if(error){ toast('No se pudo guardar'); return; }
+    r.name=name; r.amount=amount; r.dayOfMonth=dia;
+    closeQuickForm(); toast('Gasto fijo actualizado'); renderAll();
+  };
+
+  delBtn.onclick = async ()=>{
+    const { error } = await sb.from('recurring_expenses').delete().eq('id', id);
+    if(error){ toast('No se pudo eliminar'); return; }
+    DB.recurringExpenses = DB.recurringExpenses.filter(x=>x.id!==id);
+    closeQuickForm(); toast('Gasto fijo eliminado'); renderAll();
+  };
+}
+
+async function abrirEdicionCategoria(id){
+  const c = DB.expenseCategories.find(x=>x.id===id);
+  if(!c) return;
+  const panel = document.getElementById('quickFormPanel');
+  document.getElementById('quickFormTitle').textContent = 'Editar categoría';
+  document.getElementById('quickFormBody').innerHTML = `
+    <div class="field"><label>Nombre</label><input id="ecNombre" value="${c.name}"></div>
+    <div class="field"><label>Presupuesto mensual (vacío = sin límite)</label><input type="number" id="ecPresupuesto" value="${c.monthlyBudget||''}"></div>`;
+  panel.style.display='block';
+  const delBtn = document.getElementById('quickFormDelete');
+  delBtn.style.display='block';
+
+  document.getElementById('quickFormSave').onclick = async ()=>{
+    const name = document.getElementById('ecNombre').value.trim();
+    const presuRaw = document.getElementById('ecPresupuesto').value;
+    const presupuesto = presuRaw === '' ? null : parseFloat(presuRaw);
+    if(!name){ toast('Poné un nombre'); return; }
+    const { error } = await sb.from('expense_categories').update({ name, monthly_budget: presupuesto }).eq('id', id);
+    if(error){ toast('No se pudo guardar'); return; }
+    c.name=name; c.monthlyBudget=presupuesto;
+    closeQuickForm(); toast('Categoría actualizada'); renderAll();
+  };
+
+  delBtn.onclick = async ()=>{
+    const { error } = await sb.from('expense_categories').delete().eq('id', id);
+    if(error){ toast('No se pudo eliminar (puede tener gastos asociados)'); return; }
+    DB.expenseCategories = DB.expenseCategories.filter(x=>x.id!==id);
+    closeQuickForm(); toast('Categoría eliminada'); renderAll();
+  };
+}
+
+async function abrirEdicionFuente(id){
+  const s = DB.incomeSources.find(x=>x.id===id);
+  if(!s) return;
+  const panel = document.getElementById('quickFormPanel');
+  document.getElementById('quickFormTitle').textContent = 'Editar fuente de ingreso';
+  document.getElementById('quickFormBody').innerHTML = `
+    <div class="field"><label>Nombre</label><input id="efuNombre" value="${s.name}"></div>`;
+  panel.style.display='block';
+  const delBtn = document.getElementById('quickFormDelete');
+  delBtn.style.display='block';
+
+  document.getElementById('quickFormSave').onclick = async ()=>{
+    const name = document.getElementById('efuNombre').value.trim();
+    if(!name){ toast('Poné un nombre'); return; }
+    const { error } = await sb.from('income_sources').update({ name }).eq('id', id);
+    if(error){ toast('No se pudo guardar'); return; }
+    s.name=name;
+    closeQuickForm(); toast('Fuente actualizada'); renderAll();
+  };
+
+  delBtn.onclick = async ()=>{
+    const { error } = await sb.from('income_sources').delete().eq('id', id);
+    if(error){ toast('No se pudo eliminar (puede tener ingresos asociados)'); return; }
+    DB.incomeSources = DB.incomeSources.filter(x=>x.id!==id);
+    closeQuickForm(); toast('Fuente eliminada'); renderAll();
+  };
+}
+
+async function reiniciarTodo(){
+  if(!confirm('¿Seguro? Se borran todos los movimientos y los saldos quedan en $0. No se puede deshacer.')) return;
+  const uid_ = currentUserId;
+
+  await sb.from('expenses').delete().eq('user_id', uid_);
+  await sb.from('income_transactions').delete().eq('user_id', uid_);
+  await sb.from('transfers').delete().eq('user_id', uid_);
+  await sb.from('accounts').update({ balance_total:0, balance_reserved:0, balance_invested:0 }).eq('user_id', uid_);
+  await sb.from('installments').update({ installments_paid:0, is_completed:false, next_due_date:null }).eq('user_id', uid_);
+  await sb.from('savings_goals').update({ current_amount:0 }).eq('user_id', uid_);
+
+  await cargarDatos();
+  toast('Listo, todo en cero');
+  renderAll();
+}
+
+/* ------------------------------------------------------------
    RENDER: METAS
    ------------------------------------------------------------ */
 function renderMetas(){
@@ -1230,6 +1389,61 @@ function openQuickForm(kind){
   const saveBtn = document.getElementById('quickFormSave');
   panel.style.display = 'block';
 
+  if(kind==='gastofijo'){
+    title.textContent = 'Nuevo gasto fijo';
+    body.innerHTML = `
+      <div class="field"><label>Nombre</label><input id="qfNombre" placeholder="Ej: Alquiler"></div>
+      <div class="field"><label>Monto mensual</label><input type="number" id="qfMonto" placeholder="0"></div>
+      <div class="field"><label>Día de vencimiento</label><input type="number" id="qfDia" placeholder="1"></div>`;
+    saveBtn.onclick = async ()=>{
+      const name = document.getElementById('qfNombre').value.trim();
+      const amount = parseFloat(document.getElementById('qfMonto').value);
+      const dia = parseInt(document.getElementById('qfDia').value) || 1;
+      if(!name || isNaN(amount)){ toast('Completá nombre y monto'); return; }
+      const { data, error } = await sb.from('recurring_expenses').insert({
+        user_id: currentUserId, name, amount, day_of_month: dia, is_active: true
+      }).select().single();
+      if(error){ toast('No se pudo crear'); return; }
+      DB.recurringExpenses.push({ id:data.id, name, amount, dayOfMonth:dia, isActive:true });
+      closeQuickForm(); toast('Gasto fijo agregado'); renderAll();
+    };
+  }
+
+  if(kind==='categoria'){
+    title.textContent = 'Nueva categoría';
+    body.innerHTML = `
+      <div class="field"><label>Nombre</label><input id="qfNombre" placeholder="Ej: Salidas"></div>
+      <div class="field"><label>Presupuesto mensual (opcional)</label><input type="number" id="qfPresupuesto" placeholder="0"></div>`;
+    saveBtn.onclick = async ()=>{
+      const name = document.getElementById('qfNombre').value.trim();
+      const presuRaw = document.getElementById('qfPresupuesto').value;
+      const presupuesto = presuRaw === '' ? null : parseFloat(presuRaw);
+      if(!name){ toast('Poné un nombre'); return; }
+      const { data, error } = await sb.from('expense_categories').insert({
+        user_id: currentUserId, name, monthly_budget: presupuesto, is_fixed: false
+      }).select().single();
+      if(error){ toast('No se pudo crear'); return; }
+      DB.expenseCategories.push({ id:data.id, name, monthlyBudget:presupuesto, isFixed:false });
+      closeQuickForm(); toast('Categoría agregada'); renderAll();
+    };
+  }
+
+  if(kind==='fuente'){
+    title.textContent = 'Nueva fuente de ingreso';
+    body.innerHTML = `
+      <div class="field"><label>Nombre</label><input id="qfNombre" placeholder="Ej: Ferretería"></div>`;
+    saveBtn.onclick = async ()=>{
+      const name = document.getElementById('qfNombre').value.trim();
+      if(!name){ toast('Poné un nombre'); return; }
+      const { data, error } = await sb.from('income_sources').insert({
+        user_id: currentUserId, name, frequency: 'variable'
+      }).select().single();
+      if(error){ toast('No se pudo crear'); return; }
+      DB.incomeSources.push({ id:data.id, name, frequency:'variable' });
+      closeQuickForm(); toast('Fuente agregada'); renderAll();
+    };
+  }
+
   if(kind==='cuenta'){
     title.textContent = 'Nueva cuenta';
     body.innerHTML = `
@@ -1341,6 +1555,7 @@ function renderAll(){
   renderMovimientos();
   renderCuotas();
   renderMetas();
+  renderAjustes();
 }
 
 /* El render inicial ahora lo dispara entrarConSesion(), una vez
