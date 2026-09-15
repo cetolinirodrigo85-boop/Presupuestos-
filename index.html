@@ -593,7 +593,7 @@ async function cargarDatos(){
   DB = {
     accounts: (accounts.data||[]).map(a=>({ id:a.id, name:a.name, type:a.type,
       balanceTotal:Number(a.balance_total||0), balanceReserved:Number(a.balance_reserved||0),
-      balanceInvested:Number(a.balance_invested||0), isActive:a.is_active })),
+      balanceInvested:Number(a.balance_invested||0), isActive:a.is_active, scope:a.scope||'hogar' })),
     incomeSources: (incomeSources.data||[]).map(s=>({ id:s.id, name:s.name, expectedAmount:s.expected_amount, frequency:s.frequency, scope:s.scope||'hogar' })),
     incomeTransactions: (incomeTransactions.data||[]).map(t=>({ id:t.id, incomeSourceId:t.income_source_id, accountId:t.account_id, amount:Number(t.amount||0), occurredOn:t.occurred_on, scope:t.scope||'hogar', createdBy:t.created_by })),
     expenseCategories: (expenseCategories.data||[]).map(c=>({ id:c.id, name:c.name, monthlyBudget: c.monthly_budget!=null?Number(c.monthly_budget):null, isFixed:c.is_fixed, scope:c.scope||'hogar' })),
@@ -797,6 +797,7 @@ function setAmbito(a){
 function datosDelAmbito(){
   return {
     ...DB,
+    accounts: DB.accounts.filter(a=>(a.scope||'hogar')===ambitoActivo),
     expenses: DB.expenses.filter(e=>(e.scope||'hogar')===ambitoActivo),
     incomeTransactions: DB.incomeTransactions.filter(t=>(t.scope||'hogar')===ambitoActivo),
     expenseCategories: DB.expenseCategories.filter(c=>(c.scope||'hogar')===ambitoActivo),
@@ -906,7 +907,7 @@ function renderInicio(){
     efectivo: '💵', mercado_pago: '📱', banco: '🏦',
     billetera_virtual: '📲', inversion: '📈', otra: '💳'
   };
-  const cuentasActivas = DB.accounts.filter(a=>a.isActive);
+  const cuentasActivas = D.accounts.filter(a=>a.isActive);
   const cuentasInicioEl = document.getElementById('cuentasInicio');
   if(cuentasActivas.length){
     cuentasInicioEl.innerHTML = cuentasActivas
@@ -916,6 +917,8 @@ function renderInicio(){
           <div><div class="r-name">${iconoCuenta[a.type]||'💳'} ${a.name}</div></div>
           <div class="r-amount num">${money(a.balanceTotal)}</div>
         </div>`).join('');
+  } else if(ambitoActivo === 'negocio'){
+    cuentasInicioEl.innerHTML = '<div class="empty">El negocio todavía no tiene cuentas propias.<br>Creá una (por ejemplo "Caja maquillaje" o su Mercado Pago) para separar esa plata de la del hogar.</div>';
   } else {
     cuentasInicioEl.innerHTML = '<div class="empty">No tenés cuentas cargadas.</div>';
   }
@@ -1026,7 +1029,7 @@ function renderInicio(){
     }).join('');
 
     // Fuga: plata que entró y no está ni registrada como gasto ni en las cuentas
-    const saldoActual = sum(DB.accounts.filter(a=>a.isActive).map(a=>a.balanceTotal));
+    const saldoActual = sum(D.accounts.filter(a=>a.isActive).map(a=>a.balanceTotal));
     const sinExplicar = presupuesto.income - totalGastado - saldoActual;
     if(sinExplicar > 1000){
       fugaEl.innerHTML += `<div class="row" style="border-top:1px solid var(--border);margin-top:8px;padding-top:12px;">
@@ -1060,14 +1063,14 @@ function fillSelect(id, items, labelFn){
 function renderMovimientos(){
   const Dm = datosDelAmbito();
   fillSelect('gastoCategoria', Dm.expenseCategories, c=>c.name);
-  fillSelect('gastoCuenta', DB.accounts.filter(a=>a.isActive), a=>a.name);
+  fillSelect('gastoCuenta', Dm.accounts.filter(a=>a.isActive), a=>a.name);
   fillSelect('ingresoFuente', Dm.incomeSources, s=>s.name);
-  fillSelect('ingresoCuenta', DB.accounts.filter(a=>a.isActive), a=>a.name);
-  fillSelect('transDesde', DB.accounts.filter(a=>a.isActive), a=>a.name);
-  fillSelect('transHacia', DB.accounts.filter(a=>a.isActive), a=>a.name);
+  fillSelect('ingresoCuenta', Dm.accounts.filter(a=>a.isActive), a=>a.name);
+  fillSelect('transDesde', Dm.accounts.filter(a=>a.isActive), a=>a.name);
+  fillSelect('transHacia', Dm.accounts.filter(a=>a.isActive), a=>a.name);
 
   const cuentasEl = document.getElementById('cuentasLista');
-  cuentasEl.innerHTML = DB.accounts.filter(a=>a.isActive).map(a=>`
+  cuentasEl.innerHTML = Dm.accounts.filter(a=>a.isActive).map(a=>`
     <div class="row" style="cursor:pointer;" onclick="abrirEdicionCuenta('${a.id}')">
       <div><div class="r-name">${a.name}</div><div class="r-sub">${a.type.replace('_',' ')} · tocar para editar</div></div>
       <div class="r-amount num">${money(a.balanceTotal)}</div>
@@ -1317,7 +1320,7 @@ async function pagarCuota(id){
   if(error){ toast('No se pudo registrar el pago'); return; }
   inst.nextDueDate = proxVenc;
 
-  const acc = DB.accounts[0];
+  const acc = DB.accounts.find(a=>a.isActive && (a.scope||'hogar')==='hogar') || DB.accounts[0];
 
   // Registrar el pago como gasto real, para que aparezca en el
   // historial y cuente en el presupuesto de su categoría.
@@ -1366,7 +1369,7 @@ async function pagarCuota(id){
    publiques cambios (o dejala, el chequeo igual detecta el
    cambio de contenido).
    ------------------------------------------------------------ */
-const APP_VERSION = '2026.09.15b';
+const APP_VERSION = '2026.09.15c';
 
 let promptInstalacion = null;
 window.addEventListener('beforeinstallprompt', (e)=>{
@@ -1435,7 +1438,7 @@ function renderAjustes(){
   const fijos = DB.recurringExpenses.filter(r=>r.isActive);
 
   const iconos = { efectivo:'💵', mercado_pago:'📱', banco:'🏦', billetera_virtual:'📲', inversion:'📈', otra:'💳' };
-  document.getElementById('cuentasAjustes').innerHTML = DB.accounts.filter(a=>a.isActive).map(a=>`
+  document.getElementById('cuentasAjustes').innerHTML = DB.accounts.filter(a=>a.isActive && (a.scope||'hogar')===ambitoActivo).map(a=>`
     <div class="row" style="cursor:pointer;" onclick="abrirEdicionCuenta('${a.id}')">
       <div><div class="r-name">${iconos[a.type]||'💳'} ${a.name}</div><div class="r-sub">tocar para editar</div></div>
       <div class="r-amount num">${money(a.balanceTotal)}</div>
@@ -1469,21 +1472,21 @@ async function crearCuentasFrecuentes(){
     { name:'Ualá', type:'billetera_virtual' },
   ];
 
-  const existentes = DB.accounts.map(a=>a.name.toLowerCase());
+  const existentes = DB.accounts.filter(a=>(a.scope||'hogar')===ambitoActivo).map(a=>a.name.toLowerCase());
   const aCrear = frecuentes.filter(f=> !existentes.includes(f.name.toLowerCase()));
 
   if(!aCrear.length){ toast('Ya las tenés todas creadas'); return; }
 
   const { data, error } = await sb.from('accounts').insert(
     aCrear.map(f=>({ user_id: ownerId, name: f.name, type: f.type,
-      balance_total: 0, balance_reserved: 0, balance_invested: 0, is_active: true }))
+      balance_total: 0, balance_reserved: 0, balance_invested: 0, is_active: true, scope: ambitoActivo }))
   ).select();
 
   if(error){ toast('No se pudieron crear'); return; }
 
   (data||[]).forEach(d=>{
     DB.accounts.push({ id:d.id, name:d.name, type:d.type, balanceTotal:0,
-      balanceReserved:0, balanceInvested:0, isActive:true });
+      balanceReserved:0, balanceInvested:0, isActive:true, scope:ambitoActivo });
   });
 
   toast(`${aCrear.length} cuenta${aCrear.length===1?'':'s'} creada${aCrear.length===1?'':'s'}`);
@@ -1843,7 +1846,7 @@ async function abrirEdicionMovimiento(tipo, id){
       <div class="field"><label>Cuenta</label><select id="editCuenta"></select></div>
       <div class="field"><label>Descripción</label><input type="text" id="editDesc" value="${e.description||''}"></div>`;
     fillSelect('editCategoria', DB.expenseCategories, c=>c.name);
-    fillSelect('editCuenta', DB.accounts.filter(a=>a.isActive), a=>a.name);
+    fillSelect('editCuenta', DB.accounts.filter(a=>a.isActive && (a.scope||'hogar')===(e.scope||'hogar')), a=>a.name);
     document.getElementById('editCategoria').value = e.categoryId;
     document.getElementById('editCuenta').value = e.accountId;
 
@@ -1896,7 +1899,7 @@ async function abrirEdicionMovimiento(tipo, id){
       <div class="field"><label>Fuente</label><select id="editFuente"></select></div>
       <div class="field"><label>Cuenta</label><select id="editCuenta"></select></div>`;
     fillSelect('editFuente', DB.incomeSources, s=>s.name);
-    fillSelect('editCuenta', DB.accounts.filter(a=>a.isActive), a=>a.name);
+    fillSelect('editCuenta', DB.accounts.filter(a=>a.isActive && (a.scope||'hogar')===(t.scope||'hogar')), a=>a.name);
     document.getElementById('editFuente').value = t.incomeSourceId;
     document.getElementById('editCuenta').value = t.accountId;
 
@@ -2085,10 +2088,10 @@ function openQuickForm(kind){
       const balanceTotal = parseFloat(document.getElementById('qfSaldo').value)||0;
       const { data, error } = await sb.from('accounts').insert({
         user_id: ownerId, name, type, balance_total: balanceTotal,
-        balance_reserved: 0, balance_invested: 0, is_active: true
+        balance_reserved: 0, balance_invested: 0, is_active: true, scope: ambitoActivo
       }).select().single();
       if(error){ toast('No se pudo crear la cuenta'); return; }
-      DB.accounts.push({ id:data.id, name, type, balanceTotal, balanceReserved:0, balanceInvested:0, isActive:true });
+      DB.accounts.push({ id:data.id, name, type, balanceTotal, balanceReserved:0, balanceInvested:0, isActive:true, scope:ambitoActivo });
       closeQuickForm(); toast('Cuenta agregada'); renderAll();
     };
   }
