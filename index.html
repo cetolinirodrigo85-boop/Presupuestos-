@@ -208,6 +208,16 @@
       <button class="btn ghost" onclick="openQuickForm('ingreso')">+ Ingreso</button>
     </div>
 
+    <div class="card" id="vencimientosCard" style="display:none;">
+      <div class="card-title">Próximos vencimientos</div>
+      <div id="vencimientosLista"></div>
+    </div>
+
+    <div class="card">
+      <div class="card-title">Dónde está tu plata <small class="util-link" onclick="openQuickForm('cuenta')">+ cuenta</small></div>
+      <div id="cuentasInicio"></div>
+    </div>
+
     <div class="card">
       <div class="card-title">Qué compone el comprometido</div>
       <div id="comprometidoDetalle"></div>
@@ -364,6 +374,14 @@
 
   <!-- ============ AJUSTES ============ -->
   <section class="tabpage" id="page-ajustes">
+    <div class="card">
+      <div class="card-title">Cuentas y billeteras <small class="util-link" onclick="openQuickForm('cuenta')">+ agregar</small></div>
+      <div class="faint" style="margin-bottom:10px;">Efectivo, apps de pago, bancos. Cada movimiento se asigna a una.</div>
+      <div id="cuentasAjustes"></div>
+      <button class="btn ghost" style="margin-top:10px;" onclick="crearCuentasFrecuentes()">Crear las cuentas más usadas</button>
+      <div class="faint" style="margin-top:6px;">Agrega Efectivo, Mercado Pago, Banco Nación, Naranja X y Ualá. Solo crea las que te falten, con saldo en $0.</div>
+    </div>
+
     <div class="card">
       <div class="card-title">Gastos fijos mensuales <small class="util-link" onclick="openQuickForm('gastofijo')">+ agregar</small></div>
       <div class="faint" style="margin-bottom:10px;">Es lo que figura como "comprometido" cada mes, hasta que registrás el pago.</div>
@@ -531,8 +549,8 @@ async function cargarDatos(){
     incomeTransactions: (incomeTransactions.data||[]).map(t=>({ id:t.id, incomeSourceId:t.income_source_id, accountId:t.account_id, amount:Number(t.amount||0), occurredOn:t.occurred_on })),
     expenseCategories: (expenseCategories.data||[]).map(c=>({ id:c.id, name:c.name, monthlyBudget: c.monthly_budget!=null?Number(c.monthly_budget):null, isFixed:c.is_fixed })),
     expenses: (expenses.data||[]).map(e=>({ id:e.id, categoryId:e.category_id, accountId:e.account_id, amount:Number(e.amount||0), description:e.description, occurredOn:e.occurred_on })),
-    recurringExpenses: (recurringExpenses.data||[]).map(r=>({ id:r.id, name:r.name, amount:Number(r.amount||0), dayOfMonth:r.day_of_month, isActive:r.is_active, categoryId:r.category_id })),
-    installments: (installments.data||[]).map(i=>({ id:i.id, name:i.name, installmentAmount:Number(i.installment_amount||0), installmentsTotal:Number(i.installments_total||0), installmentsPaid:Number(i.installments_paid||0), isCompleted:i.is_completed, nextDueDate:i.next_due_date })),
+    recurringExpenses: (recurringExpenses.data||[]).map(r=>({ id:r.id, name:r.name, amount:Number(r.amount||0), dayOfMonth:r.day_of_month, isActive:r.is_active, categoryId:r.category_id, notify:r.notify !== false })),
+    installments: (installments.data||[]).map(i=>({ id:i.id, name:i.name, installmentAmount:Number(i.installment_amount||0), installmentsTotal:Number(i.installments_total||0), installmentsPaid:Number(i.installments_paid||0), isCompleted:i.is_completed, nextDueDate:i.next_due_date, accountId:i.account_id, kind:i.kind||'cuota', notify:i.notify !== false })),
     transfers: (transfers.data||[]).map(t=>({ id:t.id, fromAccountId:t.from_account_id, toAccountId:t.to_account_id, amount:Number(t.amount||0), occurredOn:t.occurred_on })),
     savingsGoals: (savingsGoals.data||[]).map(g=>({ id:g.id, kind:g.kind, name:g.name, targetAmount:Number(g.target_amount||0), currentAmount:Number(g.current_amount||0), priority:g.priority })),
     investments: (investments.data||[]).map(i=>({ id:i.id, name:i.name, assetType:i.asset_type, quantity:Number(i.quantity||0), avgPurchasePrice: i.avg_purchase_price!=null?Number(i.avg_purchase_price):0 })),
@@ -724,6 +742,72 @@ function renderInicio(){
   document.getElementById('brkInvertido').textContent = money(m.saldoInvertido);
 
   const detalle = detalleComprometido(DB);
+
+  // ---- Próximos vencimientos (solo los marcados para avisar) ----
+  const hoy = new Date(); hoy.setHours(0,0,0,0);
+  const vencimientos = [];
+
+  DB.recurringExpenses.filter(r=>r.isActive && r.notify && r.dayOfMonth).forEach(r=>{
+    const item = detalle.find(d=>d.tipo==='fijo' && d.nombre===r.name);
+    if(item && item.pendiente === 0) return; // ya pagado este mes
+
+    let fecha = new Date(hoy.getFullYear(), hoy.getMonth(), r.dayOfMonth);
+    if(fecha < hoy) fecha = new Date(hoy.getFullYear(), hoy.getMonth()+1, r.dayOfMonth);
+    const dias = Math.round((fecha - hoy) / 86400000);
+    vencimientos.push({ nombre:r.name, monto: item ? item.pendiente : r.amount, dias, fecha });
+  });
+
+  DB.installments.filter(i=>!i.isCompleted && i.notify && i.nextDueDate).forEach(i=>{
+    const fecha = new Date(i.nextDueDate + 'T00:00:00');
+    const dias = Math.round((fecha - hoy) / 86400000);
+    if(dias > 45) return;
+    const cuenta = DB.accounts.find(a=>a.id===i.accountId);
+    vencimientos.push({
+      nombre: i.kind === 'prestamo' ? `Préstamo ${i.name}` : `Cuota ${i.name}`,
+      monto: i.installmentAmount, dias, fecha,
+      extra: cuenta ? cuenta.name : null
+    });
+  });
+
+  vencimientos.sort((a,b)=>a.dias-b.dias);
+  const vencCard = document.getElementById('vencimientosCard');
+  if(vencimientos.length){
+    vencCard.style.display = 'block';
+    document.getElementById('vencimientosLista').innerHTML = vencimientos.map(v=>{
+      let texto, cls;
+      if(v.dias < 0){ texto = `vencido hace ${Math.abs(v.dias)} día${Math.abs(v.dias)===1?'':'s'}`; cls='neg'; }
+      else if(v.dias === 0){ texto = 'vence hoy'; cls='neg'; }
+      else if(v.dias === 1){ texto = 'vence mañana'; cls='neg'; }
+      else if(v.dias <= 5){ texto = `en ${v.dias} días`; cls=''; }
+      else { texto = `en ${v.dias} días`; cls='muted'; }
+      const extra = v.extra ? ` · ${v.extra}` : '';
+      return `<div class="row">
+        <div><div class="r-name">${v.nombre}</div><div class="r-sub ${cls}">${texto}${extra}</div></div>
+        <div class="r-amount num">${money(v.monto)}</div>
+      </div>`;
+    }).join('');
+  } else {
+    vencCard.style.display = 'none';
+  }
+
+  // Desglose de dónde está la plata
+  const iconoCuenta = {
+    efectivo: '💵', mercado_pago: '📱', banco: '🏦',
+    billetera_virtual: '📲', inversion: '📈', otra: '💳'
+  };
+  const cuentasActivas = DB.accounts.filter(a=>a.isActive);
+  const cuentasInicioEl = document.getElementById('cuentasInicio');
+  if(cuentasActivas.length){
+    cuentasInicioEl.innerHTML = cuentasActivas
+      .sort((a,b)=> b.balanceTotal - a.balanceTotal)
+      .map(a=>`
+        <div class="row" style="cursor:pointer;" onclick="abrirEdicionCuenta('${a.id}')">
+          <div><div class="r-name">${iconoCuenta[a.type]||'💳'} ${a.name}</div></div>
+          <div class="r-amount num">${money(a.balanceTotal)}</div>
+        </div>`).join('');
+  } else {
+    cuentasInicioEl.innerHTML = '<div class="empty">No tenés cuentas cargadas.</div>';
+  }
   const detEl = document.getElementById('comprometidoDetalle');
   if(!detalle.length){
     detEl.innerHTML = '<div class="empty">No tenés gastos fijos ni cuotas. El comprometido es $0.</div>';
@@ -953,19 +1037,89 @@ function renderCuotas(){
   document.getElementById('cuotasLista').innerHTML = activas.length ? activas.map(i=>{
     const pct = round2((i.installmentsPaid/i.installmentsTotal)*100);
     const restante = (i.installmentsTotal - i.installmentsPaid) * i.installmentAmount;
-    return `<div style="margin-bottom:14px;">
-      <div class="row" style="border:none;padding:0 0 4px;">
-        <div><div class="r-name">${i.name}</div><div class="r-sub">${i.installmentsPaid}/${i.installmentsTotal} cuotas · ${money(i.installmentAmount)}/mes</div></div>
+    const cuenta = DB.accounts.find(a=>a.id===i.accountId);
+    const etiqueta = i.kind === 'prestamo' ? '🏦 Préstamo' : '🧾 Cuotas';
+    let venc = '';
+    if(i.nextDueDate){
+      const hoy = new Date(); hoy.setHours(0,0,0,0);
+      const f = new Date(i.nextDueDate + 'T00:00:00');
+      const dias = Math.round((f - hoy) / 86400000);
+      if(dias < 0) venc = ` · <span class="neg">vencida hace ${Math.abs(dias)} d</span>`;
+      else if(dias === 0) venc = ' · <span class="neg">vence hoy</span>';
+      else venc = ` · vence en ${dias} d`;
+    }
+    return `<div style="margin-bottom:16px;">
+      <div class="row" style="border:none;padding:0 0 4px;" onclick="abrirEdicionCuota('${i.id}')">
+        <div><div class="r-name">${i.name}</div>
+          <div class="r-sub">${etiqueta} · ${i.installmentsPaid}/${i.installmentsTotal} · ${money(i.installmentAmount)}/mes${venc}</div>
+          ${cuenta ? `<div class="faint">se paga en ${cuenta.name}</div>` : ''}
+        </div>
         <div class="r-amount num">${money(restante)}</div>
       </div>
       <div class="bar-track"><div class="bar-fill" style="width:${pct}%"></div></div>
       <button class="btn ghost" style="margin-top:8px;" onclick="pagarCuota('${i.id}')">Registrar pago de este mes</button>
     </div>`;
-  }).join('') : '<div class="empty">No tenés cuotas activas.</div>';
+  }).join('') : '<div class="empty">No tenés cuotas ni préstamos activos.</div>';
 
   document.getElementById('cuotasCompletadasLista').innerHTML = completadas.length ? completadas.map(i=>
     `<div class="row"><div class="r-name">${i.name}</div><div class="r-sub pos">Pagada ✓</div></div>`
   ).join('') : '<div class="empty">Todavía ninguna cuota terminada.</div>';
+}
+
+async function abrirEdicionCuota(id){
+  const i = DB.installments.find(x=>x.id===id);
+  if(!i) return;
+  const panel = document.getElementById('quickFormPanel');
+  document.getElementById('quickFormTitle').textContent = i.kind==='prestamo' ? 'Editar préstamo' : 'Editar cuota';
+  document.getElementById('quickFormBody').innerHTML = `
+    <div class="field"><label>Tipo</label>
+      <select id="ecuKind">
+        <option value="cuota">Compra en cuotas</option>
+        <option value="prestamo">Préstamo</option>
+      </select></div>
+    <div class="field"><label>Nombre</label><input id="ecuNombre" value="${i.name}"></div>
+    <div class="field"><label>Monto por cuota</label><input type="number" id="ecuMonto" value="${i.installmentAmount}"></div>
+    <div class="field"><label>Cuotas totales</label><input type="number" id="ecuTotal" value="${i.installmentsTotal}"></div>
+    <div class="field"><label>Cuotas pagadas</label><input type="number" id="ecuPagadas" value="${i.installmentsPaid}"></div>
+    <div class="field"><label>Dónde se paga</label><select id="ecuCuenta"></select></div>
+    <div class="field"><label>Próximo vencimiento</label><input type="date" id="ecuVenc" value="${i.nextDueDate||''}"></div>
+    <div class="field"><label><input type="checkbox" id="ecuNotify" ${i.notify?'checked':''} style="width:auto;margin-right:6px;">Avisarme cuando se acerque</label></div>`;
+  fillSelect('ecuCuenta', DB.accounts.filter(a=>a.isActive), a=>a.name);
+  document.getElementById('ecuKind').value = i.kind || 'cuota';
+  if(i.accountId) document.getElementById('ecuCuenta').value = i.accountId;
+  panel.style.display='block';
+  const delBtn = document.getElementById('quickFormDelete');
+  delBtn.style.display='block';
+
+  document.getElementById('quickFormSave').onclick = async ()=>{
+    const name = document.getElementById('ecuNombre').value.trim();
+    const amount = parseFloat(document.getElementById('ecuMonto').value);
+    const total = parseInt(document.getElementById('ecuTotal').value);
+    const pagadas = parseInt(document.getElementById('ecuPagadas').value) || 0;
+    const kindVal = document.getElementById('ecuKind').value;
+    const accountId = document.getElementById('ecuCuenta').value || null;
+    const venc = document.getElementById('ecuVenc').value || null;
+    const notify = document.getElementById('ecuNotify').checked;
+    if(!name || !amount || !total){ toast('Completá nombre, monto y cuotas'); return; }
+
+    const { error } = await sb.from('installments').update({
+      name, installment_amount: amount, installments_total: total, installments_paid: pagadas,
+      is_completed: pagadas >= total, kind: kindVal, account_id: accountId,
+      next_due_date: venc, notify
+    }).eq('id', id);
+    if(error){ toast('No se pudo guardar'); return; }
+
+    Object.assign(i, { name, installmentAmount:amount, installmentsTotal:total, installmentsPaid:pagadas,
+      isCompleted: pagadas>=total, kind:kindVal, accountId, nextDueDate:venc, notify });
+    closeQuickForm(); toast('Actualizado'); renderAll();
+  };
+
+  delBtn.onclick = async ()=>{
+    const { error } = await sb.from('installments').delete().eq('id', id);
+    if(error){ toast('No se pudo eliminar'); return; }
+    DB.installments = DB.installments.filter(x=>x.id!==id);
+    closeQuickForm(); toast('Eliminado'); renderAll();
+  };
 }
 
 async function pagarCuota(id){
@@ -1032,7 +1186,7 @@ async function pagarCuota(id){
    publiques cambios (o dejala, el chequeo igual detecta el
    cambio de contenido).
    ------------------------------------------------------------ */
-const APP_VERSION = '2026.09.14c';
+const APP_VERSION = '2026.09.14e';
 
 let promptInstalacion = null;
 window.addEventListener('beforeinstallprompt', (e)=>{
@@ -1099,9 +1253,16 @@ function renderAjustes(){
   if(lblVersion) lblVersion.textContent = APP_VERSION + (yaInstalada() ? ' · instalada' : ' · en el navegador');
 
   const fijos = DB.recurringExpenses.filter(r=>r.isActive);
+
+  const iconos = { efectivo:'💵', mercado_pago:'📱', banco:'🏦', billetera_virtual:'📲', inversion:'📈', otra:'💳' };
+  document.getElementById('cuentasAjustes').innerHTML = DB.accounts.filter(a=>a.isActive).map(a=>`
+    <div class="row" style="cursor:pointer;" onclick="abrirEdicionCuenta('${a.id}')">
+      <div><div class="r-name">${iconos[a.type]||'💳'} ${a.name}</div><div class="r-sub">tocar para editar</div></div>
+      <div class="r-amount num">${money(a.balanceTotal)}</div>
+    </div>`).join('') || '<div class="empty">No tenés cuentas.</div>';
   document.getElementById('gastosFijosLista').innerHTML = fijos.length ? fijos.map(r=>`
     <div class="row" style="cursor:pointer;" onclick="abrirEdicionGastoFijo('${r.id}')">
-      <div><div class="r-name">${r.name}</div><div class="r-sub">tocar para editar</div></div>
+      <div><div class="r-name">${r.name}</div><div class="r-sub">día ${r.dayOfMonth||1} ${r.notify?'· 🔔 con aviso':'· sin aviso'}</div></div>
       <div class="r-amount num">${money(r.amount)}</div>
     </div>`).join('') : '<div class="empty">No tenés gastos fijos. El comprometido queda en $0.</div>';
 
@@ -1117,6 +1278,36 @@ function renderAjustes(){
     </div>`).join('') : '<div class="empty">No hay fuentes de ingreso.</div>';
 }
 
+async function crearCuentasFrecuentes(){
+  const frecuentes = [
+    { name:'Efectivo', type:'efectivo' },
+    { name:'Mercado Pago', type:'mercado_pago' },
+    { name:'Banco Nación', type:'banco' },
+    { name:'Naranja X', type:'billetera_virtual' },
+    { name:'Ualá', type:'billetera_virtual' },
+  ];
+
+  const existentes = DB.accounts.map(a=>a.name.toLowerCase());
+  const aCrear = frecuentes.filter(f=> !existentes.includes(f.name.toLowerCase()));
+
+  if(!aCrear.length){ toast('Ya las tenés todas creadas'); return; }
+
+  const { data, error } = await sb.from('accounts').insert(
+    aCrear.map(f=>({ user_id: currentUserId, name: f.name, type: f.type,
+      balance_total: 0, balance_reserved: 0, balance_invested: 0, is_active: true }))
+  ).select();
+
+  if(error){ toast('No se pudieron crear'); return; }
+
+  (data||[]).forEach(d=>{
+    DB.accounts.push({ id:d.id, name:d.name, type:d.type, balanceTotal:0,
+      balanceReserved:0, balanceInvested:0, isActive:true });
+  });
+
+  toast(`${aCrear.length} cuenta${aCrear.length===1?'':'s'} creada${aCrear.length===1?'':'s'}`);
+  renderAll();
+}
+
 async function abrirEdicionGastoFijo(id){
   const r = DB.recurringExpenses.find(x=>x.id===id);
   if(!r) return;
@@ -1128,7 +1319,8 @@ async function abrirEdicionGastoFijo(id){
     <div class="field"><label>Día de vencimiento</label><input type="number" id="efDia" value="${r.dayOfMonth||1}"></div>
     <div class="field"><label>Categoría con la que se paga</label><select id="efCategoria"></select>
       <div class="faint" style="margin-top:4px;">Cuando registres un gasto en esta categoría, se descuenta del comprometido.</div>
-    </div>`;
+    </div>
+    <div class="field"><label><input type="checkbox" id="efNotify" ${r.notify?'checked':''} style="width:auto;margin-right:6px;">Avisarme cuando se acerque el vencimiento</label></div>`;
   fillSelect('efCategoria', DB.expenseCategories, c=>c.name);
   if(r.categoryId) document.getElementById('efCategoria').value = r.categoryId;
   panel.style.display='block';
@@ -1140,10 +1332,11 @@ async function abrirEdicionGastoFijo(id){
     const amount = parseFloat(document.getElementById('efMonto').value);
     const dia = parseInt(document.getElementById('efDia').value) || 1;
     const categoryId = document.getElementById('efCategoria').value || null;
+    const notify = document.getElementById('efNotify').checked;
     if(!name || isNaN(amount)){ toast('Completá nombre y monto'); return; }
-    const { error } = await sb.from('recurring_expenses').update({ name, amount, day_of_month: dia, category_id: categoryId }).eq('id', id);
+    const { error } = await sb.from('recurring_expenses').update({ name, amount, day_of_month: dia, category_id: categoryId, notify }).eq('id', id);
     if(error){ toast('No se pudo guardar'); return; }
-    r.name=name; r.amount=amount; r.dayOfMonth=dia; r.categoryId=categoryId;
+    r.name=name; r.amount=amount; r.dayOfMonth=dia; r.categoryId=categoryId; r.notify=notify;
     closeQuickForm(); toast('Gasto fijo actualizado'); renderAll();
   };
 
@@ -1667,23 +1860,43 @@ function openQuickForm(kind){
   }
 
   if(kind==='cuota'){
-    title.textContent = 'Nueva cuota';
+    title.textContent = 'Nueva cuota o préstamo';
+    const hoy = new Date();
+    const proxMes = new Date(hoy.getFullYear(), hoy.getMonth()+1, 10).toISOString().slice(0,10);
     body.innerHTML = `
-      <div class="field"><label>Nombre</label><input id="qfNombre" placeholder="Ej: Notebook"></div>
+      <div class="field"><label>Tipo</label>
+        <select id="qfKind">
+          <option value="cuota">Compra en cuotas</option>
+          <option value="prestamo">Préstamo</option>
+        </select></div>
+      <div class="field"><label>Nombre</label><input id="qfNombre" placeholder="Ej: Notebook / Préstamo MP"></div>
       <div class="field"><label>Monto por cuota</label><input type="number" id="qfMonto" placeholder="0"></div>
-      <div class="field"><label>Cantidad de cuotas</label><input type="number" id="qfCant" placeholder="12"></div>`;
+      <div class="field"><label>Cuotas totales</label><input type="number" id="qfCant" placeholder="12"></div>
+      <div class="field"><label>Cuotas ya pagadas</label><input type="number" id="qfPagadas" value="0"></div>
+      <div class="field"><label>Dónde se paga</label><select id="qfCuentaCuota"></select></div>
+      <div class="field"><label>Próximo vencimiento</label><input type="date" id="qfVencimiento" value="${proxMes}"></div>
+      <div class="field"><label><input type="checkbox" id="qfNotify" checked style="width:auto;margin-right:6px;">Avisarme cuando se acerque</label></div>`;
+    fillSelect('qfCuentaCuota', DB.accounts.filter(a=>a.isActive), a=>a.name);
     saveBtn.onclick = async ()=>{
       const name = document.getElementById('qfNombre').value.trim();
       const amount = parseFloat(document.getElementById('qfMonto').value);
       const total = parseInt(document.getElementById('qfCant').value);
-      if(!name || !amount || !total){ toast('Completá todos los campos'); return; }
+      const pagadas = parseInt(document.getElementById('qfPagadas').value) || 0;
+      const kindVal = document.getElementById('qfKind').value;
+      const accountId = document.getElementById('qfCuentaCuota').value || null;
+      const venc = document.getElementById('qfVencimiento').value || null;
+      const notify = document.getElementById('qfNotify').checked;
+      if(!name || !amount || !total){ toast('Completá nombre, monto y cuotas'); return; }
       const { data, error } = await sb.from('installments').insert({
-        user_id: currentUserId, name, installment_amount: amount,
-        installments_total: total, installments_paid: 0, is_completed: false
+        user_id: currentUserId, name, installment_amount: amount, installments_total: total,
+        installments_paid: pagadas, is_completed: pagadas >= total, kind: kindVal,
+        account_id: accountId, next_due_date: venc, notify
       }).select().single();
-      if(error){ toast('No se pudo crear la cuota'); return; }
-      DB.installments.push({ id:data.id, name, installmentAmount:amount, installmentsTotal:total, installmentsPaid:0, isCompleted:false });
-      closeQuickForm(); toast('Cuota agregada'); renderAll();
+      if(error){ toast('No se pudo crear'); return; }
+      DB.installments.push({ id:data.id, name, installmentAmount:amount, installmentsTotal:total,
+        installmentsPaid:pagadas, isCompleted: pagadas>=total, kind:kindVal,
+        accountId, nextDueDate:venc, notify });
+      closeQuickForm(); toast(kindVal==='prestamo'?'Préstamo agregado':'Cuota agregada'); renderAll();
     };
   }
 
