@@ -359,6 +359,16 @@
     </div>
 
     <div class="card">
+      <div class="card-title">Aplicación</div>
+      <div class="row" style="border:none;padding:0 0 10px;">
+        <div><div class="r-name">Versión</div><div class="r-sub" id="appVersionLabel"></div></div>
+      </div>
+      <button class="btn ghost" onclick="instalarApp()" style="margin-bottom:8px;">Instalar en la pantalla de inicio</button>
+      <button class="btn ghost" onclick="buscarActualizacion()">Buscar actualizaciones</button>
+      <div id="instalarAyuda" class="faint" style="margin-top:10px;"></div>
+    </div>
+
+    <div class="card">
       <div class="card-title">Empezar de cero</div>
       <div class="faint" style="margin-bottom:12px;">Borra todos los movimientos, deja los saldos y el fondo de emergencia en $0 y reinicia las cuotas. Tus cuentas, categorías y gastos fijos se mantienen.</div>
       <button class="btn danger-outline" onclick="reiniciarTodo()">Reiniciar todos los montos a cero</button>
@@ -518,6 +528,7 @@ document.addEventListener('visibilitychange', async ()=>{
   if(document.visibilityState === 'visible' && currentUserId){
     await cargarDatos();
     renderAll();
+    buscarActualizacion(true); // silencioso: recarga sola si hay versión nueva
   }
 });
 
@@ -911,9 +922,79 @@ async function pagarCuota(id){
 }
 
 /* ------------------------------------------------------------
+   VERSIÓN, INSTALACIÓN Y ACTUALIZACIONES
+   ------------------------------------------------------------
+   APP_VERSION se compara contra la del servidor para detectar
+   si hay una versión nueva desplegada. Subila cada vez que
+   publiques cambios (o dejala, el chequeo igual detecta el
+   cambio de contenido).
+   ------------------------------------------------------------ */
+const APP_VERSION = '2026.09.14';
+
+let promptInstalacion = null;
+window.addEventListener('beforeinstallprompt', (e)=>{
+  e.preventDefault();
+  promptInstalacion = e;
+});
+
+function esIOS(){
+  return /iPad|iPhone|iPod/.test(navigator.userAgent);
+}
+function yaInstalada(){
+  return window.matchMedia('(display-mode: standalone)').matches || window.navigator.standalone === true;
+}
+
+async function instalarApp(){
+  const ayuda = document.getElementById('instalarAyuda');
+
+  if(yaInstalada()){
+    ayuda.textContent = 'Ya estás usando la app instalada.';
+    return;
+  }
+
+  if(promptInstalacion){
+    promptInstalacion.prompt();
+    const { outcome } = await promptInstalacion.userChoice;
+    ayuda.textContent = outcome === 'accepted' ? 'Instalando…' : 'Instalación cancelada.';
+    promptInstalacion = null;
+    return;
+  }
+
+  if(esIOS()){
+    ayuda.innerHTML = 'En iPhone se instala desde Safari:<br>1. Abrí esta página en <b>Safari</b><br>2. Tocá el botón <b>Compartir</b> (el cuadrado con la flecha)<br>3. Deslizá y tocá <b>“Agregar a pantalla de inicio”</b>';
+  } else {
+    ayuda.textContent = 'Usá el menú de tu navegador y buscá “Instalar aplicación” o “Agregar a pantalla de inicio”.';
+  }
+}
+
+async function buscarActualizacion(silencioso){
+  try{
+    const res = await fetch(window.location.pathname + '?v=' + Date.now(), { cache: 'no-store' });
+    const html = await res.text();
+    const match = html.match(/const APP_VERSION = '([^']+)'/);
+    const versionServidor = match ? match[1] : null;
+
+    if(versionServidor && versionServidor !== APP_VERSION){
+      if(silencioso || confirm('Hay una versión nueva disponible. ¿Actualizar ahora?')){
+        window.location.reload();
+      }
+      return true;
+    }
+    if(!silencioso) toast('Ya tenés la última versión');
+    return false;
+  } catch(e){
+    if(!silencioso) toast('No se pudo verificar');
+    return false;
+  }
+}
+
+/* ------------------------------------------------------------
    RENDER: AJUSTES
    ------------------------------------------------------------ */
 function renderAjustes(){
+  const lblVersion = document.getElementById('appVersionLabel');
+  if(lblVersion) lblVersion.textContent = APP_VERSION + (yaInstalada() ? ' · instalada' : ' · en el navegador');
+
   const fijos = DB.recurringExpenses.filter(r=>r.isActive);
   document.getElementById('gastosFijosLista').innerHTML = fijos.length ? fijos.map(r=>`
     <div class="row" style="cursor:pointer;" onclick="abrirEdicionGastoFijo('${r.id}')">
