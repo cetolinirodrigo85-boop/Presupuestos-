@@ -188,8 +188,13 @@
 <div class="wrap">
   <header class="top">
     <div class="greet" id="greetTime">Hola</div>
-    <div class="name">Rodrigo <span>· CFO personal</span></div>
+    <div class="name" id="nombreUsuario">Rodrigo <span>· CFO personal</span></div>
   </header>
+
+  <div class="segment" id="ambitoSegment" style="display:none;">
+    <button class="active" onclick="setAmbito('hogar')">🏠 Hogar</button>
+    <button onclick="setAmbito('negocio')">💄 Negocio</button>
+  </div>
 
   <!-- ============ INICIO ============ -->
   <section class="tabpage active" id="page-inicio">
@@ -206,6 +211,15 @@
     <div class="fab-actions">
       <button class="btn primary" onclick="openQuickForm('gasto')">+ Gasto</button>
       <button class="btn ghost" onclick="openQuickForm('ingreso')">+ Ingreso</button>
+    </div>
+
+    <div class="card" id="negocioCard" style="display:none;">
+      <div class="card-title">Resultado del negocio <small id="negocioMes"></small></div>
+      <div class="row"><div class="r-name">Ventas</div><div class="r-amount num pos" id="negVentas">$0</div></div>
+      <div class="row"><div class="r-name">Costos</div><div class="r-amount num neg" id="negCostos">$0</div></div>
+      <div class="row"><div class="r-name">Ganancia</div><div class="r-amount num" id="negGanancia">$0</div></div>
+      <div class="row"><div class="r-name">Margen</div><div class="r-amount num" id="negMargen">0%</div></div>
+      <div class="faint" style="margin-top:8px;" id="negMsg"></div>
     </div>
 
     <div class="card" id="vencimientosCard" style="display:none;">
@@ -356,6 +370,14 @@
 
   <!-- ============ SIMULADOR ============ -->
   <section class="tabpage" id="page-simulador">
+    <div class="card" id="simNegocioCard" style="display:none;">
+      <div class="card-title">Vendí, ¿cuánto reinvierto?</div>
+      <div class="faint" style="margin-bottom:10px;">Reparte la plata de las ventas usando el margen real de tu negocio.</div>
+      <div class="field"><label>Plata disponible de las ventas</label><input type="number" id="simNegMonto" placeholder="0"></div>
+      <button class="btn primary" onclick="simularRepartoNegocio()">Calcular reparto</button>
+      <div id="simNegResultado"></div>
+    </div>
+    <div id="simHogarBloque">
     <div class="card">
       <div class="card-title">¿Puedo gastar?</div>
       <div class="field"><label>Monto a gastar</label><input type="number" id="puedoGastarMonto" placeholder="0"></div>
@@ -384,6 +406,7 @@
       <button class="btn primary" onclick="calcularProyeccion()">Proyectar</button>
       <div id="proyeccionResultado"></div>
       <div class="faint" style="margin-top:10px;">Esto es una simulación con supuestos fijos, no una garantía de rendimiento.</div>
+    </div>
     </div>
   </section>
 
@@ -509,8 +532,11 @@ const SUPABASE_URL = 'https://lgynvzcdhesvfgbfgbgq.supabase.co';
 const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImxneW52emNkaGVzdmZnYmZnYmdxIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODg3MjAyNDIsImV4cCI6MjEwNDI5NjI0Mn0.gi0NdyTMT0Gqx5h8oc-hUHBA2R8c7uMbpbKsCQ3AwjQ';
 const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
-let currentUserId = null;
+let currentUserId = null;   // quién está usando la app ahora
+let ownerId = null;         // de quién son los datos (el espacio compartido)
+let miNombre = null;
 let DB = null;
+let ambitoActivo = 'hogar'; // 'hogar' o 'negocio'
 
 async function iniciarSesion(){
   const email = document.getElementById('loginEmail').value.trim();
@@ -534,6 +560,14 @@ async function iniciarSesion(){
 
 async function entrarConSesion(session){
   currentUserId = session.user.id;
+  miNombre = session.user.email;
+
+  // ¿Soy miembro del espacio de otra persona? Entonces trabajo sobre sus datos.
+  const { data: membresia } = await sb.from('household_members')
+    .select('owner_id, display_name').eq('member_id', currentUserId).maybeSingle();
+  ownerId = membresia ? membresia.owner_id : currentUserId;
+  if(membresia && membresia.display_name) miNombre = membresia.display_name;
+
   document.getElementById('loginScreen').style.display = 'none';
   await cargarDatos();
   setMovTipo('gasto');
@@ -541,7 +575,7 @@ async function entrarConSesion(session){
 }
 
 async function cargarDatos(){
-  const uid_ = currentUserId;
+  const uid_ = ownerId;
   const [accounts, incomeSources, incomeTransactions, expenseCategories, expenses, recurringExpenses, installments, transfers, savingsGoals, investments] =
     await Promise.all([
       sb.from('accounts').select('*').eq('user_id', uid_),
@@ -560,10 +594,10 @@ async function cargarDatos(){
     accounts: (accounts.data||[]).map(a=>({ id:a.id, name:a.name, type:a.type,
       balanceTotal:Number(a.balance_total||0), balanceReserved:Number(a.balance_reserved||0),
       balanceInvested:Number(a.balance_invested||0), isActive:a.is_active })),
-    incomeSources: (incomeSources.data||[]).map(s=>({ id:s.id, name:s.name, expectedAmount:s.expected_amount, frequency:s.frequency })),
-    incomeTransactions: (incomeTransactions.data||[]).map(t=>({ id:t.id, incomeSourceId:t.income_source_id, accountId:t.account_id, amount:Number(t.amount||0), occurredOn:t.occurred_on })),
-    expenseCategories: (expenseCategories.data||[]).map(c=>({ id:c.id, name:c.name, monthlyBudget: c.monthly_budget!=null?Number(c.monthly_budget):null, isFixed:c.is_fixed })),
-    expenses: (expenses.data||[]).map(e=>({ id:e.id, categoryId:e.category_id, accountId:e.account_id, amount:Number(e.amount||0), description:e.description, occurredOn:e.occurred_on })),
+    incomeSources: (incomeSources.data||[]).map(s=>({ id:s.id, name:s.name, expectedAmount:s.expected_amount, frequency:s.frequency, scope:s.scope||'hogar' })),
+    incomeTransactions: (incomeTransactions.data||[]).map(t=>({ id:t.id, incomeSourceId:t.income_source_id, accountId:t.account_id, amount:Number(t.amount||0), occurredOn:t.occurred_on, scope:t.scope||'hogar', createdBy:t.created_by })),
+    expenseCategories: (expenseCategories.data||[]).map(c=>({ id:c.id, name:c.name, monthlyBudget: c.monthly_budget!=null?Number(c.monthly_budget):null, isFixed:c.is_fixed, scope:c.scope||'hogar' })),
+    expenses: (expenses.data||[]).map(e=>({ id:e.id, categoryId:e.category_id, accountId:e.account_id, amount:Number(e.amount||0), description:e.description, occurredOn:e.occurred_on, scope:e.scope||'hogar', createdBy:e.created_by })),
     recurringExpenses: (recurringExpenses.data||[]).map(r=>({ id:r.id, name:r.name, amount:Number(r.amount||0), dayOfMonth:r.day_of_month, isActive:r.is_active, categoryId:r.category_id, notify:r.notify !== false })),
     installments: (installments.data||[]).map(i=>({ id:i.id, name:i.name, installmentAmount:Number(i.installment_amount||0), installmentsTotal:Number(i.installments_total||0), installmentsPaid:Number(i.installments_paid||0), isCompleted:i.is_completed, nextDueDate:i.next_due_date, accountId:i.account_id, kind:i.kind||'cuota', notify:i.notify !== false })),
     transfers: (transfers.data||[]).map(t=>({ id:t.id, fromAccountId:t.from_account_id, toAccountId:t.to_account_id, amount:Number(t.amount||0), occurredOn:t.occurred_on })),
@@ -744,11 +778,73 @@ function toast(msg){
   setTimeout(()=>t.classList.remove('show'), 2200);
 }
 
+function setAmbito(a){
+  ambitoActivo = a;
+  document.querySelectorAll('#ambitoSegment button').forEach((b,i)=>
+    b.classList.toggle('active', ['hogar','negocio'][i]===a));
+
+  const esNegocio = a === 'negocio';
+  const simNeg = document.getElementById('simNegocioCard');
+  const simHogar = document.getElementById('simHogarBloque');
+  if(simNeg) simNeg.style.display = esNegocio ? 'block' : 'none';
+  if(simHogar) simHogar.style.display = esNegocio ? 'none' : 'block';
+
+  renderAll();
+}
+
+/* Filtra los datos según el ámbito activo, para que lo del negocio
+   no distorsione la tasa de ahorro del hogar y viceversa. */
+function datosDelAmbito(){
+  return {
+    ...DB,
+    expenses: DB.expenses.filter(e=>(e.scope||'hogar')===ambitoActivo),
+    incomeTransactions: DB.incomeTransactions.filter(t=>(t.scope||'hogar')===ambitoActivo),
+    expenseCategories: DB.expenseCategories.filter(c=>(c.scope||'hogar')===ambitoActivo),
+    incomeSources: DB.incomeSources.filter(s=>(s.scope||'hogar')===ambitoActivo),
+    // Gastos fijos y cuotas son siempre del hogar
+    recurringExpenses: ambitoActivo==='hogar' ? DB.recurringExpenses : [],
+    installments: ambitoActivo==='hogar' ? DB.installments : [],
+  };
+}
+
 /* ------------------------------------------------------------
    RENDER: INICIO
    ------------------------------------------------------------ */
 function renderInicio(){
-  const m = calcularDineroDisponible(DB);
+  const D = datosDelAmbito();
+
+  // Mostrar el selector de ámbito solo si hay algo del negocio cargado
+  const hayNegocio = DB.expenseCategories.some(c=>c.scope==='negocio')
+    || DB.incomeSources.some(s=>s.scope==='negocio');
+  document.getElementById('ambitoSegment').style.display = hayNegocio ? 'flex' : 'none';
+  if(!hayNegocio) ambitoActivo = 'hogar';
+
+  if(miNombre) document.getElementById('nombreUsuario').innerHTML =
+    `${miNombre.split('@')[0]} <span>· ${ambitoActivo==='negocio'?'negocio':'CFO personal'}</span>`;
+
+  // Resultado del negocio
+  const negCard = document.getElementById('negocioCard');
+  if(ambitoActivo === 'negocio'){
+    const nowN = new Date();
+    const pN = construirPresupuestoMensual(D, nowN.getFullYear(), nowN.getMonth()+1);
+    const ganancia = pN.income - pN.expenses;
+    const margen = pN.income > 0 ? (ganancia/pN.income)*100 : 0;
+    negCard.style.display = 'block';
+    document.getElementById('negocioMes').textContent = nowN.toLocaleDateString('es-AR',{month:'long'});
+    document.getElementById('negVentas').textContent = money(pN.income);
+    document.getElementById('negCostos').textContent = money(pN.expenses);
+    const gEl = document.getElementById('negGanancia');
+    gEl.textContent = money(ganancia);
+    gEl.className = 'r-amount num ' + (ganancia >= 0 ? 'pos' : 'neg');
+    document.getElementById('negMargen').textContent = margen.toFixed(0)+'%';
+    document.getElementById('negMsg').textContent = pN.income === 0
+      ? 'Registrá las ventas como ingreso y las compras de stock como gasto.'
+      : (margen < 20 ? 'Margen bajo: revisá los precios o el costo del stock.' : 'Buen margen.');
+  } else {
+    negCard.style.display = 'none';
+  }
+
+  const m = calcularDineroDisponible(D);
   const heroEl = document.getElementById('heroDisponible');
   heroEl.textContent = money(m.saldoDisponibleReal);
   heroEl.classList.toggle('neg', m.saldoDisponibleReal<0);
@@ -756,13 +852,13 @@ function renderInicio(){
   document.getElementById('brkComprometido').textContent = money(m.saldoComprometido);
   document.getElementById('brkInvertido').textContent = money(m.saldoInvertido);
 
-  const detalle = detalleComprometido(DB);
+  const detalle = detalleComprometido(D);
 
   // ---- Próximos vencimientos (solo los marcados para avisar) ----
   const hoy = new Date(); hoy.setHours(0,0,0,0);
   const vencimientos = [];
 
-  DB.recurringExpenses.filter(r=>r.isActive && r.notify && r.dayOfMonth).forEach(r=>{
+  D.recurringExpenses.filter(r=>r.isActive && r.notify && r.dayOfMonth).forEach(r=>{
     const item = detalle.find(d=>d.tipo==='fijo' && d.nombre===r.name);
     if(item && item.pendiente === 0) return; // ya pagado este mes
 
@@ -772,7 +868,7 @@ function renderInicio(){
     vencimientos.push({ nombre:r.name, monto: item ? item.pendiente : r.amount, dias, fecha });
   });
 
-  DB.installments.filter(i=>!i.isCompleted && i.notify && i.nextDueDate).forEach(i=>{
+  D.installments.filter(i=>!i.isCompleted && i.notify && i.nextDueDate).forEach(i=>{
     const fecha = new Date(i.nextDueDate + 'T00:00:00');
     const dias = Math.round((fecha - hoy) / 86400000);
     if(dias > 45) return;
@@ -843,7 +939,7 @@ function renderInicio(){
   const now = new Date();
   const year = now.getFullYear(), month = now.getMonth()+1;
   document.getElementById('mesActualLabel').textContent = now.toLocaleDateString('es-AR',{month:'long'});
-  const presupuesto = construirPresupuestoMensual(DB, year, month);
+  const presupuesto = construirPresupuestoMensual(D, year, month);
 
   const lista = document.getElementById('presupuestoLista');
   if(presupuesto.lines.every(l=>l.planned===0)){
@@ -900,10 +996,10 @@ function renderInicio(){
   document.getElementById('tasaAhorroMsg').textContent = msgTasa;
 
   // ---- Adónde se fue la plata ----
-  const gastosMes = DB.expenses.filter(e=>isSameMonth(e.occurredOn,year,month));
+  const gastosMes = D.expenses.filter(e=>isSameMonth(e.occurredOn,year,month));
   const porCategoria = {};
   gastosMes.forEach(e=>{
-    const nombre = (DB.expenseCategories.find(c=>c.id===e.categoryId)||{}).name || 'Sin categoría';
+    const nombre = (D.expenseCategories.find(c=>c.id===e.categoryId)||{}).name || 'Sin categoría';
     porCategoria[nombre] = (porCategoria[nombre]||0) + e.amount;
   });
 
@@ -962,9 +1058,10 @@ function fillSelect(id, items, labelFn){
 }
 
 function renderMovimientos(){
-  fillSelect('gastoCategoria', DB.expenseCategories, c=>c.name);
+  const Dm = datosDelAmbito();
+  fillSelect('gastoCategoria', Dm.expenseCategories, c=>c.name);
   fillSelect('gastoCuenta', DB.accounts.filter(a=>a.isActive), a=>a.name);
-  fillSelect('ingresoFuente', DB.incomeSources, s=>s.name);
+  fillSelect('ingresoFuente', Dm.incomeSources, s=>s.name);
   fillSelect('ingresoCuenta', DB.accounts.filter(a=>a.isActive), a=>a.name);
   fillSelect('transDesde', DB.accounts.filter(a=>a.isActive), a=>a.name);
   fillSelect('transHacia', DB.accounts.filter(a=>a.isActive), a=>a.name);
@@ -1046,7 +1143,8 @@ async function registrarGasto(){
   const description = document.getElementById('gastoDesc').value;
 
   const { data, error } = await sb.from('expenses').insert({
-    user_id: currentUserId, category_id: categoryId, account_id: accountId,
+    user_id: ownerId, created_by: currentUserId, scope: ambitoActivo,
+    category_id: categoryId, account_id: accountId,
     amount: monto, description: description || null, occurred_on: todayISO()
   }).select().single();
   if(error){ toast('No se pudo guardar el gasto'); return; }
@@ -1069,7 +1167,8 @@ async function registrarIngreso(){
   const accountId = document.getElementById('ingresoCuenta').value;
 
   const { data, error } = await sb.from('income_transactions').insert({
-    user_id: currentUserId, income_source_id: incomeSourceId, account_id: accountId,
+    user_id: ownerId, created_by: currentUserId, scope: ambitoActivo,
+    income_source_id: incomeSourceId, account_id: accountId,
     amount: monto, occurred_on: todayISO()
   }).select().single();
   if(error){ toast('No se pudo guardar el ingreso'); return; }
@@ -1093,7 +1192,8 @@ async function registrarTransferencia(){
   if(desde===hacia){ toast('Elegí cuentas distintas'); return; }
 
   const { data, error } = await sb.from('transfers').insert({
-    user_id: currentUserId, from_account_id: desde, to_account_id: hacia,
+    user_id: ownerId, created_by: currentUserId,
+    from_account_id: desde, to_account_id: hacia,
     amount: monto, occurred_on: todayISO()
   }).select().single();
   if(error){ toast('No se pudo guardar la transferencia'); return; }
@@ -1225,7 +1325,7 @@ async function pagarCuota(id){
     || c.name.toLowerCase() === ('cuota ' + inst.name).toLowerCase());
   if(!cat){
     const { data: nuevaCat } = await sb.from('expense_categories').insert({
-      user_id: currentUserId, name: 'Cuota ' + inst.name, monthly_budget: inst.installmentAmount, is_fixed: true
+      user_id: ownerId, name: 'Cuota ' + inst.name, monthly_budget: inst.installmentAmount, is_fixed: true
     }).select().single();
     if(nuevaCat){
       cat = { id: nuevaCat.id, name: nuevaCat.name, monthlyBudget: Number(nuevaCat.monthly_budget||0), isFixed: nuevaCat.is_fixed };
@@ -1235,7 +1335,7 @@ async function pagarCuota(id){
 
   if(cat){
     const { data: gasto } = await sb.from('expenses').insert({
-      user_id: currentUserId, category_id: cat.id, account_id: acc ? acc.id : null,
+      user_id: ownerId, category_id: cat.id, account_id: acc ? acc.id : null,
       amount: inst.installmentAmount, description: `Cuota ${inst.installmentsPaid} de ${inst.installmentsTotal}`,
       occurred_on: todayISO()
     }).select().single();
@@ -1266,7 +1366,7 @@ async function pagarCuota(id){
    publiques cambios (o dejala, el chequeo igual detecta el
    cambio de contenido).
    ------------------------------------------------------------ */
-const APP_VERSION = '2026.09.14f';
+const APP_VERSION = '2026.09.15b';
 
 let promptInstalacion = null;
 window.addEventListener('beforeinstallprompt', (e)=>{
@@ -1346,13 +1446,15 @@ function renderAjustes(){
       <div class="r-amount num">${money(r.amount)}</div>
     </div>`).join('') : '<div class="empty">No tenés gastos fijos. El comprometido queda en $0.</div>';
 
-  document.getElementById('categoriasLista').innerHTML = DB.expenseCategories.length ? DB.expenseCategories.map(c=>`
+  const catsAmbito = DB.expenseCategories.filter(c=>(c.scope||'hogar')===ambitoActivo);
+  document.getElementById('categoriasLista').innerHTML = catsAmbito.length ? catsAmbito.map(c=>`
     <div class="row" style="cursor:pointer;" onclick="abrirEdicionCategoria('${c.id}')">
       <div><div class="r-name">${c.name}</div><div class="r-sub">tocar para editar</div></div>
       <div class="r-amount num">${c.monthlyBudget ? money(c.monthlyBudget) : '—'}</div>
     </div>`).join('') : '<div class="empty">No hay categorías.</div>';
 
-  document.getElementById('fuentesLista').innerHTML = DB.incomeSources.length ? DB.incomeSources.map(s=>`
+  const fuentesAmbito = DB.incomeSources.filter(s=>(s.scope||'hogar')===ambitoActivo);
+  document.getElementById('fuentesLista').innerHTML = fuentesAmbito.length ? fuentesAmbito.map(s=>`
     <div class="row" style="cursor:pointer;" onclick="abrirEdicionFuente('${s.id}')">
       <div><div class="r-name">${s.name}</div><div class="r-sub">tocar para editar</div></div>
     </div>`).join('') : '<div class="empty">No hay fuentes de ingreso.</div>';
@@ -1373,7 +1475,7 @@ async function crearCuentasFrecuentes(){
   if(!aCrear.length){ toast('Ya las tenés todas creadas'); return; }
 
   const { data, error } = await sb.from('accounts').insert(
-    aCrear.map(f=>({ user_id: currentUserId, name: f.name, type: f.type,
+    aCrear.map(f=>({ user_id: ownerId, name: f.name, type: f.type,
       balance_total: 0, balance_reserved: 0, balance_invested: 0, is_active: true }))
   ).select();
 
@@ -1489,7 +1591,7 @@ async function abrirEdicionFuente(id){
 
 async function reiniciarTodo(){
   if(!confirm('¿Seguro? Se borran todos los movimientos y los saldos quedan en $0. No se puede deshacer.')) return;
-  const uid_ = currentUserId;
+  const uid_ = ownerId;
 
   await sb.from('expenses').delete().eq('user_id', uid_);
   await sb.from('income_transactions').delete().eq('user_id', uid_);
@@ -1561,8 +1663,60 @@ async function aportarFondo(id){
 }
 
 /* ------------------------------------------------------------
-   RENDER: SIMULADOR
+   SIMULADOR DEL NEGOCIO: cuánto reponer y cuánto retirar
+   ------------------------------------------------------------
+   La regla usa el margen real del negocio, no un número inventado:
+   primero se repone lo que costó la mercadería vendida (si no,
+   el negocio se descapitaliza), y recién lo que sobra se reparte
+   entre crecimiento, reserva y retiro personal.
    ------------------------------------------------------------ */
+function margenDelNegocio(){
+  const ventas = sum(DB.incomeTransactions.filter(t=>t.scope==='negocio').map(t=>t.amount));
+  const costos = sum(DB.expenses.filter(e=>e.scope==='negocio').map(e=>e.amount));
+  if(ventas <= 0) return { ratioCosto: 0.5, estimado: true, ventas, costos };
+  const ratio = Math.min(0.9, Math.max(0.1, costos / ventas));
+  return { ratioCosto: ratio, estimado: costos === 0, ventas, costos };
+}
+
+function simularRepartoNegocio(){
+  const monto = parseFloat(document.getElementById('simNegMonto').value);
+  if(!monto || monto<=0){ toast('Ingresá un monto válido'); return; }
+
+  const m = margenDelNegocio();
+  const reponer = round2(monto * m.ratioCosto);
+  const resto = round2(monto - reponer);
+  const crecer = round2(resto * 0.20);
+  const reserva = round2(resto * 0.10);
+  const retiro = round2(resto - crecer - reserva);
+
+  const nota = m.estimado
+    ? 'Todavía no hay suficientes datos de costos, así que se usó un supuesto de 50% de costo. A medida que registres compras de stock, el cálculo se ajusta solo.'
+    : `Basado en tu margen real: de cada 100 pesos que vendés, ${Math.round(m.ratioCosto*100)} son costo de mercadería.`;
+
+  document.getElementById('simNegResultado').innerHTML = `
+    <div class="card" style="margin-top:12px;margin-bottom:0;background:var(--surface-2);">
+      <div class="row">
+        <div><div class="r-name">Reponer stock</div><div class="r-sub">para no quedarte sin mercadería</div></div>
+        <div class="r-amount num">${money(reponer)}</div>
+      </div>
+      <div class="row">
+        <div><div class="r-name">Crecer</div><div class="r-sub">stock extra para vender más</div></div>
+        <div class="r-amount num">${money(crecer)}</div>
+      </div>
+      <div class="row">
+        <div><div class="r-name">Reserva del negocio</div><div class="r-sub">envíos, publicidad, imprevistos</div></div>
+        <div class="r-amount num">${money(reserva)}</div>
+      </div>
+      <div class="row">
+        <div><div class="r-name pos">Para vos</div><div class="r-sub">ganancia que podés retirar</div></div>
+        <div class="r-amount num pos">${money(retiro)}</div>
+      </div>
+    </div>
+    <div class="faint" style="margin-top:10px;">${nota}</div>
+    <div class="faint" style="margin-top:6px;">Es una sugerencia de reparto, no una regla fija. Si querés crecer más rápido, moved parte del retiro a "Crecer".</div>`;
+}
+
+
 function evaluarPuedoGastar(){
   const monto = parseFloat(document.getElementById('puedoGastarMonto').value);
   if(!monto || monto<=0){ toast('Ingresá un monto válido'); return; }
@@ -1867,7 +2021,7 @@ function openQuickForm(kind){
       const categoryId = document.getElementById('qfCategoriaFija').value || null;
       if(!name || isNaN(amount)){ toast('Completá nombre y monto'); return; }
       const { data, error } = await sb.from('recurring_expenses').insert({
-        user_id: currentUserId, name, amount, day_of_month: dia, is_active: true, category_id: categoryId
+        user_id: ownerId, name, amount, day_of_month: dia, is_active: true, category_id: categoryId
       }).select().single();
       if(error){ toast('No se pudo crear'); return; }
       DB.recurringExpenses.push({ id:data.id, name, amount, dayOfMonth:dia, isActive:true, categoryId });
@@ -1886,10 +2040,10 @@ function openQuickForm(kind){
       const presupuesto = presuRaw === '' ? null : parseFloat(presuRaw);
       if(!name){ toast('Poné un nombre'); return; }
       const { data, error } = await sb.from('expense_categories').insert({
-        user_id: currentUserId, name, monthly_budget: presupuesto, is_fixed: false
+        user_id: ownerId, name, monthly_budget: presupuesto, is_fixed: false, scope: ambitoActivo
       }).select().single();
       if(error){ toast('No se pudo crear'); return; }
-      DB.expenseCategories.push({ id:data.id, name, monthlyBudget:presupuesto, isFixed:false });
+      DB.expenseCategories.push({ id:data.id, name, monthlyBudget:presupuesto, isFixed:false, scope:ambitoActivo });
       closeQuickForm(); toast('Categoría agregada'); renderAll();
     };
   }
@@ -1902,10 +2056,10 @@ function openQuickForm(kind){
       const name = document.getElementById('qfNombre').value.trim();
       if(!name){ toast('Poné un nombre'); return; }
       const { data, error } = await sb.from('income_sources').insert({
-        user_id: currentUserId, name, frequency: 'variable'
+        user_id: ownerId, name, frequency: 'variable', scope: ambitoActivo
       }).select().single();
       if(error){ toast('No se pudo crear'); return; }
-      DB.incomeSources.push({ id:data.id, name, frequency:'variable' });
+      DB.incomeSources.push({ id:data.id, name, frequency:'variable', scope:ambitoActivo });
       closeQuickForm(); toast('Fuente agregada'); renderAll();
     };
   }
@@ -1930,7 +2084,7 @@ function openQuickForm(kind){
       const type = document.getElementById('qfTipo').value;
       const balanceTotal = parseFloat(document.getElementById('qfSaldo').value)||0;
       const { data, error } = await sb.from('accounts').insert({
-        user_id: currentUserId, name, type, balance_total: balanceTotal,
+        user_id: ownerId, name, type, balance_total: balanceTotal,
         balance_reserved: 0, balance_invested: 0, is_active: true
       }).select().single();
       if(error){ toast('No se pudo crear la cuenta'); return; }
@@ -1968,7 +2122,7 @@ function openQuickForm(kind){
       const notify = document.getElementById('qfNotify').checked;
       if(!name || !amount || !total){ toast('Completá nombre, monto y cuotas'); return; }
       const { data, error } = await sb.from('installments').insert({
-        user_id: currentUserId, name, installment_amount: amount, installments_total: total,
+        user_id: ownerId, name, installment_amount: amount, installments_total: total,
         installments_paid: pagadas, is_completed: pagadas >= total, kind: kindVal,
         account_id: accountId, next_due_date: venc, notify
       }).select().single();
@@ -1992,7 +2146,7 @@ function openQuickForm(kind){
       const current = parseFloat(document.getElementById('qfActual').value)||0;
       if(!name || !target){ toast('Completá nombre y objetivo'); return; }
       const { data, error } = await sb.from('savings_goals').insert({
-        user_id: currentUserId, kind: 'ahorro', name, target_amount: target,
+        user_id: ownerId, kind: 'ahorro', name, target_amount: target,
         current_amount: current, priority: 2
       }).select().single();
       if(error){ toast('No se pudo crear la meta'); return; }
@@ -2023,7 +2177,7 @@ function openQuickForm(kind){
       const price = parseFloat(document.getElementById('qfPrecio').value);
       if(!name || !quantity || !price){ toast('Completá todos los campos'); return; }
       const { data, error } = await sb.from('investments').insert({
-        user_id: currentUserId, name, asset_type: assetType, quantity, avg_purchase_price: price
+        user_id: ownerId, name, asset_type: assetType, quantity, avg_purchase_price: price
       }).select().single();
       if(error){ toast('No se pudo agregar la inversión'); return; }
       DB.investments.push({ id:data.id, name, assetType, quantity, avgPurchasePrice:price });
