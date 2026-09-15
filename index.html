@@ -234,6 +234,21 @@
     </div>
 
     <div class="card">
+      <div class="card-title">Tu tasa de ahorro <small id="tasaAhorroMes"></small></div>
+      <div style="text-align:center;padding:8px 0 4px;">
+        <div class="num" id="tasaAhorroPct" style="font-size:42px;line-height:1;">0%</div>
+        <div class="faint" id="tasaAhorroSub" style="margin-top:6px;"></div>
+      </div>
+      <div class="bar-track" style="height:9px;margin-top:10px;"><div class="bar-fill" id="tasaAhorroBar" style="width:0%"></div></div>
+      <div class="faint" id="tasaAhorroMsg" style="margin-top:10px;"></div>
+    </div>
+
+    <div class="card">
+      <div class="card-title">Adónde se fue la plata</div>
+      <div id="fugaLista"></div>
+    </div>
+
+    <div class="card">
       <div class="card-title">Resumen del mes</div>
       <div class="row"><div class="r-name">Ingresos</div><div class="r-amount num pos" id="resIngresos">$0</div></div>
       <div class="row"><div class="r-name">Gastos</div><div class="r-amount num neg" id="resGastos">$0</div></div>
@@ -860,6 +875,71 @@ function renderInicio(){
   document.getElementById('resAhorro').textContent = money(presupuesto.savings);
   document.getElementById('resAhorroPct').textContent = presupuesto.savingsPercent.toFixed(0)+'%';
 
+  // ---- Tasa de ahorro ----
+  const tasa = presupuesto.income > 0 ? (presupuesto.savings / presupuesto.income) * 100 : 0;
+  const elPct = document.getElementById('tasaAhorroPct');
+  const elBar = document.getElementById('tasaAhorroBar');
+  elPct.textContent = tasa.toFixed(0) + '%';
+  document.getElementById('tasaAhorroMes').textContent = now.toLocaleDateString('es-AR',{month:'long'});
+  document.getElementById('tasaAhorroSub').textContent =
+    presupuesto.income > 0
+      ? `${money(presupuesto.savings)} de ${money(presupuesto.income)}`
+      : 'Todavía no registraste ingresos este mes';
+
+  elBar.style.width = Math.min(100, Math.max(0, tasa)) + '%';
+  elBar.className = 'bar-fill' + (tasa < 0 ? ' over' : (tasa < 10 ? ' warn' : ''));
+  elPct.className = 'num' + (tasa < 0 ? ' neg' : (tasa >= 20 ? ' pos' : ''));
+
+  let msgTasa;
+  if(presupuesto.income === 0) msgTasa = 'La tasa de ahorro es lo que más determina tu patrimonio a largo plazo — más que el rendimiento de cualquier inversión.';
+  else if(tasa < 0) msgTasa = 'Este mes estás gastando más de lo que entra. Mirá abajo qué categoría se lo está llevando.';
+  else if(tasa < 10) msgTasa = 'Por debajo del 10%. Con tus ingresos deberías poder bastante más — revisá las categorías variables.';
+  else if(tasa < 20) msgTasa = 'Vas bien. Subir del 20% acelera mucho tus objetivos.';
+  else if(tasa < 40) msgTasa = 'Muy buena tasa. Mantenerla es más valioso que buscar mejores rendimientos.';
+  else msgTasa = 'Tasa excelente. A este ritmo tu patrimonio crece principalmente por lo que aportás, no por el mercado.';
+  document.getElementById('tasaAhorroMsg').textContent = msgTasa;
+
+  // ---- Adónde se fue la plata ----
+  const gastosMes = DB.expenses.filter(e=>isSameMonth(e.occurredOn,year,month));
+  const porCategoria = {};
+  gastosMes.forEach(e=>{
+    const nombre = (DB.expenseCategories.find(c=>c.id===e.categoryId)||{}).name || 'Sin categoría';
+    porCategoria[nombre] = (porCategoria[nombre]||0) + e.amount;
+  });
+
+  const ranking = Object.entries(porCategoria).map(([nombre,monto])=>({nombre,monto}))
+    .sort((a,b)=>b.monto-a.monto);
+
+  const fugaEl = document.getElementById('fugaLista');
+  if(!ranking.length){
+    fugaEl.innerHTML = presupuesto.income > 0
+      ? `<div class="empty">Registraste ${money(presupuesto.income)} de ingresos y ningún gasto. Si esa plata ya no está, hay ${money(presupuesto.income)} sin registrar.</div>`
+      : '<div class="empty">Todavía no hay gastos este mes.</div>';
+  } else {
+    const totalGastado = sum(ranking.map(r=>r.monto));
+    fugaEl.innerHTML = ranking.map(r=>{
+      const pctDelTotal = totalGastado > 0 ? (r.monto/totalGastado)*100 : 0;
+      const pctDelIngreso = presupuesto.income > 0 ? (r.monto/presupuesto.income)*100 : 0;
+      return `<div style="margin-bottom:10px;">
+        <div class="row" style="border:none;padding:0 0 4px;">
+          <div class="r-name">${r.nombre}</div>
+          <div><span class="r-amount num">${money(r.monto)}</span> <span class="faint">${pctDelIngreso.toFixed(0)}% de tus ingresos</span></div>
+        </div>
+        <div class="bar-track"><div class="bar-fill" style="width:${pctDelTotal}%;background:var(--gold);"></div></div>
+      </div>`;
+    }).join('');
+
+    // Fuga: plata que entró y no está ni registrada como gasto ni en las cuentas
+    const saldoActual = sum(DB.accounts.filter(a=>a.isActive).map(a=>a.balanceTotal));
+    const sinExplicar = presupuesto.income - totalGastado - saldoActual;
+    if(sinExplicar > 1000){
+      fugaEl.innerHTML += `<div class="row" style="border-top:1px solid var(--border);margin-top:8px;padding-top:12px;">
+        <div><div class="r-name neg">Sin registrar</div><div class="r-sub">entró, no está en tus cuentas y no figura como gasto</div></div>
+        <div class="r-amount num neg">${money(sinExplicar)}</div>
+      </div>`;
+    }
+  }
+
   const h = now.getHours();
   document.getElementById('greetTime').textContent = h<12?'Buen día':(h<20?'Buenas tardes':'Buenas noches');
 }
@@ -1186,7 +1266,7 @@ async function pagarCuota(id){
    publiques cambios (o dejala, el chequeo igual detecta el
    cambio de contenido).
    ------------------------------------------------------------ */
-const APP_VERSION = '2026.09.14e';
+const APP_VERSION = '2026.09.14f';
 
 let promptInstalacion = null;
 window.addEventListener('beforeinstallprompt', (e)=>{
