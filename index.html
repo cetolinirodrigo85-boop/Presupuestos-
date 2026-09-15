@@ -209,6 +209,11 @@
     </div>
 
     <div class="card">
+      <div class="card-title">Qué compone el comprometido</div>
+      <div id="comprometidoDetalle"></div>
+    </div>
+
+    <div class="card">
       <div class="card-title">Presupuesto de este mes <small id="mesActualLabel"></small></div>
       <div id="presupuestoLista"></div>
     </div>
@@ -509,7 +514,7 @@ async function cargarDatos(){
     incomeTransactions: (incomeTransactions.data||[]).map(t=>({ id:t.id, incomeSourceId:t.income_source_id, accountId:t.account_id, amount:Number(t.amount||0), occurredOn:t.occurred_on })),
     expenseCategories: (expenseCategories.data||[]).map(c=>({ id:c.id, name:c.name, monthlyBudget: c.monthly_budget!=null?Number(c.monthly_budget):null, isFixed:c.is_fixed })),
     expenses: (expenses.data||[]).map(e=>({ id:e.id, categoryId:e.category_id, accountId:e.account_id, amount:Number(e.amount||0), description:e.description, occurredOn:e.occurred_on })),
-    recurringExpenses: (recurringExpenses.data||[]).map(r=>({ id:r.id, name:r.name, amount:Number(r.amount||0), dayOfMonth:r.day_of_month, isActive:r.is_active })),
+    recurringExpenses: (recurringExpenses.data||[]).map(r=>({ id:r.id, name:r.name, amount:Number(r.amount||0), dayOfMonth:r.day_of_month, isActive:r.is_active, categoryId:r.category_id })),
     installments: (installments.data||[]).map(i=>({ id:i.id, name:i.name, installmentAmount:Number(i.installment_amount||0), installmentsTotal:Number(i.installments_total||0), installmentsPaid:Number(i.installments_paid||0), isCompleted:i.is_completed, nextDueDate:i.next_due_date })),
     transfers: (transfers.data||[]).map(t=>({ id:t.id, fromAccountId:t.from_account_id, toAccountId:t.to_account_id, amount:Number(t.amount||0), occurredOn:t.occurred_on })),
     savingsGoals: (savingsGoals.data||[]).map(g=>({ id:g.id, kind:g.kind, name:g.name, targetAmount:Number(g.target_amount||0), currentAmount:Number(g.current_amount||0), priority:g.priority })),
@@ -535,30 +540,44 @@ document.addEventListener('visibilitychange', async ()=>{
 /* ------------------------------------------------------------
    MOTOR FINANCIERO
    ------------------------------------------------------------ */
+/* Detalle de qué compone el dinero comprometido: cada gasto fijo
+   con lo ya pagado y lo que falta, más las cuotas pendientes.
+   Se usa para el cálculo y también para mostrarlo en pantalla. */
+function detalleComprometido(db){
+  const now = new Date();
+  const year = now.getFullYear(), month = now.getMonth()+1;
+  const gastosDelMesActual = db.expenses.filter(e=>isSameMonth(e.occurredOn,year,month));
+  const items = [];
+
+  db.recurringExpenses.filter(r=>r.isActive).forEach(r=>{
+    // 1º por la categoría vinculada; si no hay, por nombre coincidente
+    let cat = r.categoryId ? db.expenseCategories.find(c=>c.id===r.categoryId) : null;
+    if(!cat) cat = db.expenseCategories.find(c=>c.name.toLowerCase()===r.name.toLowerCase());
+
+    const pagado = cat ? sum(gastosDelMesActual.filter(e=>e.categoryId===cat.id).map(e=>e.amount)) : 0;
+    items.push({ tipo:'fijo', nombre:r.name, total:r.amount, pagado,
+      pendiente: Math.max(0, r.amount - pagado), vinculado: !!cat,
+      categoriaNombre: cat ? cat.name : null });
+  });
+
+  const finDeMes = new Date(year, month, 0).toISOString().slice(0,10);
+  db.installments.filter(i=>!i.isCompleted).forEach(i=>{
+    const yaPagada = i.nextDueDate && i.nextDueDate > finDeMes;
+    items.push({ tipo:'cuota', nombre:i.name, total:i.installmentAmount,
+      pagado: yaPagada ? i.installmentAmount : 0,
+      pendiente: yaPagada ? 0 : i.installmentAmount, vinculado:true, categoriaNombre:null });
+  });
+
+  return items;
+}
+
 function calcularDineroDisponible(db){
   const activas = db.accounts.filter(a=>a.isActive);
   const saldoTotal = sum(activas.map(a=>a.balanceTotal));
   const saldoReservado = sum(activas.map(a=>a.balanceReserved));
   const saldoInvertido = sum(activas.map(a=>a.balanceInvested));
 
-  const now = new Date();
-  const year = now.getFullYear(), month = now.getMonth()+1;
-  const gastosDelMesActual = db.expenses.filter(e=>isSameMonth(e.occurredOn,year,month));
-
-  const gastosFijos = sum(db.recurringExpenses.filter(r=>r.isActive).map(r=>{
-    const cat = db.expenseCategories.find(c=>c.name.toLowerCase()===r.name.toLowerCase());
-    if(!cat) return r.amount; // sin categoría equivalente, se cuenta completo
-    const yaPagado = sum(gastosDelMesActual.filter(e=>e.categoryId===cat.id).map(e=>e.amount));
-    return Math.max(0, r.amount - yaPagado);
-  }));
-
-  const finDeMes = new Date(year, month, 0).toISOString().slice(0,10);
-  const cuotas = sum(db.installments.filter(i=>!i.isCompleted).filter(i=>{
-    // si ya se pagó la de este mes, next_due_date apunta al mes que viene
-    if(!i.nextDueDate) return true;
-    return i.nextDueDate <= finDeMes;
-  }).map(i=>i.installmentAmount));
-  const saldoComprometido = gastosFijos + cuotas;
+  const saldoComprometido = sum(detalleComprometido(db).map(i=>i.pendiente));
   const saldoDisponible = saldoTotal - saldoReservado - saldoInvertido;
   const saldoDisponibleReal = saldoDisponible - saldoComprometido;
   return { saldoTotal, saldoReservado, saldoComprometido, saldoInvertido, saldoDisponible, saldoDisponibleReal };
@@ -686,6 +705,24 @@ function renderInicio(){
   document.getElementById('brkTotal').textContent = money(m.saldoTotal);
   document.getElementById('brkComprometido').textContent = money(m.saldoComprometido);
   document.getElementById('brkInvertido').textContent = money(m.saldoInvertido);
+
+  const detalle = detalleComprometido(DB);
+  const detEl = document.getElementById('comprometidoDetalle');
+  if(!detalle.length){
+    detEl.innerHTML = '<div class="empty">No tenés gastos fijos ni cuotas. El comprometido es $0.</div>';
+  } else {
+    detEl.innerHTML = detalle.map(i=>{
+      let estado, cls;
+      if(i.pendiente === 0){ estado = 'pagado este mes ✓'; cls = 'pos'; }
+      else if(i.pagado > 0){ estado = `pagaste ${money(i.pagado)} de ${money(i.total)}`; cls = ''; }
+      else if(!i.vinculado){ estado = 'sin categoría vinculada — no se descuenta solo'; cls = 'neg'; }
+      else { estado = i.tipo==='cuota' ? 'cuota del mes sin pagar' : 'sin pagar este mes'; cls = ''; }
+      return `<div class="row">
+        <div><div class="r-name">${i.nombre}</div><div class="r-sub ${cls}">${estado}</div></div>
+        <div class="r-amount num">${money(i.pendiente)}</div>
+      </div>`;
+    }).join('');
+  }
 
   const now = new Date();
   const year = now.getFullYear(), month = now.getMonth()+1;
@@ -929,7 +966,7 @@ async function pagarCuota(id){
    publiques cambios (o dejala, el chequeo igual detecta el
    cambio de contenido).
    ------------------------------------------------------------ */
-const APP_VERSION = '2026.09.14';
+const APP_VERSION = '2026.09.14b';
 
 let promptInstalacion = null;
 window.addEventListener('beforeinstallprompt', (e)=>{
@@ -1022,7 +1059,12 @@ async function abrirEdicionGastoFijo(id){
   document.getElementById('quickFormBody').innerHTML = `
     <div class="field"><label>Nombre</label><input id="efNombre" value="${r.name}"></div>
     <div class="field"><label>Monto mensual</label><input type="number" id="efMonto" value="${r.amount}"></div>
-    <div class="field"><label>Día de vencimiento</label><input type="number" id="efDia" value="${r.dayOfMonth||1}"></div>`;
+    <div class="field"><label>Día de vencimiento</label><input type="number" id="efDia" value="${r.dayOfMonth||1}"></div>
+    <div class="field"><label>Categoría con la que se paga</label><select id="efCategoria"></select>
+      <div class="faint" style="margin-top:4px;">Cuando registres un gasto en esta categoría, se descuenta del comprometido.</div>
+    </div>`;
+  fillSelect('efCategoria', DB.expenseCategories, c=>c.name);
+  if(r.categoryId) document.getElementById('efCategoria').value = r.categoryId;
   panel.style.display='block';
   const delBtn = document.getElementById('quickFormDelete');
   delBtn.style.display='block';
@@ -1031,10 +1073,11 @@ async function abrirEdicionGastoFijo(id){
     const name = document.getElementById('efNombre').value.trim();
     const amount = parseFloat(document.getElementById('efMonto').value);
     const dia = parseInt(document.getElementById('efDia').value) || 1;
+    const categoryId = document.getElementById('efCategoria').value || null;
     if(!name || isNaN(amount)){ toast('Completá nombre y monto'); return; }
-    const { error } = await sb.from('recurring_expenses').update({ name, amount, day_of_month: dia }).eq('id', id);
+    const { error } = await sb.from('recurring_expenses').update({ name, amount, day_of_month: dia, category_id: categoryId }).eq('id', id);
     if(error){ toast('No se pudo guardar'); return; }
-    r.name=name; r.amount=amount; r.dayOfMonth=dia;
+    r.name=name; r.amount=amount; r.dayOfMonth=dia; r.categoryId=categoryId;
     closeQuickForm(); toast('Gasto fijo actualizado'); renderAll();
   };
 
@@ -1475,17 +1518,20 @@ function openQuickForm(kind){
     body.innerHTML = `
       <div class="field"><label>Nombre</label><input id="qfNombre" placeholder="Ej: Alquiler"></div>
       <div class="field"><label>Monto mensual</label><input type="number" id="qfMonto" placeholder="0"></div>
-      <div class="field"><label>Día de vencimiento</label><input type="number" id="qfDia" placeholder="1"></div>`;
+      <div class="field"><label>Día de vencimiento</label><input type="number" id="qfDia" placeholder="1"></div>
+      <div class="field"><label>Categoría con la que se paga</label><select id="qfCategoriaFija"></select></div>`;
+    fillSelect('qfCategoriaFija', DB.expenseCategories, c=>c.name);
     saveBtn.onclick = async ()=>{
       const name = document.getElementById('qfNombre').value.trim();
       const amount = parseFloat(document.getElementById('qfMonto').value);
       const dia = parseInt(document.getElementById('qfDia').value) || 1;
+      const categoryId = document.getElementById('qfCategoriaFija').value || null;
       if(!name || isNaN(amount)){ toast('Completá nombre y monto'); return; }
       const { data, error } = await sb.from('recurring_expenses').insert({
-        user_id: currentUserId, name, amount, day_of_month: dia, is_active: true
+        user_id: currentUserId, name, amount, day_of_month: dia, is_active: true, category_id: categoryId
       }).select().single();
       if(error){ toast('No se pudo crear'); return; }
-      DB.recurringExpenses.push({ id:data.id, name, amount, dayOfMonth:dia, isActive:true });
+      DB.recurringExpenses.push({ id:data.id, name, amount, dayOfMonth:dia, isActive:true, categoryId });
       closeQuickForm(); toast('Gasto fijo agregado'); renderAll();
     };
   }
