@@ -270,8 +270,25 @@
     </div>
 
     <div class="card">
-      <div class="card-title">Historial reciente</div>
+      <div class="card-title">Historial <small id="historialResumen"></small></div>
+      <div class="field" style="margin-bottom:8px;">
+        <input type="text" id="filtroTexto" placeholder="Buscar por descripción o categoría…" oninput="renderMovimientos()">
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:10px;">
+        <div class="field" style="margin:0;">
+          <select id="filtroMes" onchange="renderMovimientos()"></select>
+        </div>
+        <div class="field" style="margin:0;">
+          <select id="filtroTipo" onchange="renderMovimientos()">
+            <option value="">Todos</option>
+            <option value="gasto">Solo gastos</option>
+            <option value="ingreso">Solo ingresos</option>
+            <option value="transferencia">Transferencias</option>
+          </select>
+        </div>
+      </div>
       <div id="historialLista"></div>
+      <button class="btn ghost" id="btnVerMas" style="margin-top:10px;display:none;" onclick="verMasHistorial()">Ver más</button>
     </div>
   </section>
 
@@ -795,17 +812,66 @@ function renderMovimientos(){
       <div class="r-amount num">${money(a.balanceTotal)}</div>
     </div>`).join('') || '<div class="empty">No hay cuentas cargadas.</div>';
 
-  const historial = [
-    ...DB.expenses.map(e=>({tipo:'gasto', id:e.id, fecha:e.occurredOn, monto:e.amount, desc: (DB.expenseCategories.find(c=>c.id===e.categoryId)||{}).name || e.description || 'Gasto'})),
-    ...DB.incomeTransactions.map(t=>({tipo:'ingreso', id:t.id, fecha:t.occurredOn, monto:t.amount, desc:(DB.incomeSources.find(s=>s.id===t.incomeSourceId)||{}).name || 'Ingreso'})),
-    ...DB.transfers.map(t=>({tipo:'transferencia', id:t.id, fecha:t.occurredOn, monto:t.amount, desc:'Transferencia'}))
-  ].sort((a,b)=> b.fecha.localeCompare(a.fecha)).slice(0,12);
+  // ---- Historial con filtros ----
+  const todos = [
+    ...DB.expenses.map(e=>({tipo:'gasto', id:e.id, fecha:e.occurredOn, monto:e.amount,
+      desc: (DB.expenseCategories.find(c=>c.id===e.categoryId)||{}).name || 'Gasto',
+      detalle: e.description || ''})),
+    ...DB.incomeTransactions.map(t=>({tipo:'ingreso', id:t.id, fecha:t.occurredOn, monto:t.amount,
+      desc:(DB.incomeSources.find(s=>s.id===t.incomeSourceId)||{}).name || 'Ingreso', detalle:''})),
+    ...DB.transfers.map(t=>({tipo:'transferencia', id:t.id, fecha:t.occurredOn, monto:t.amount,
+      desc:'Transferencia', detalle:''}))
+  ].sort((a,b)=> b.fecha.localeCompare(a.fecha));
 
-  document.getElementById('historialLista').innerHTML = historial.length ? historial.map(h=>{
+  // Opciones de mes: se arman a partir de los movimientos que existen
+  const selMes = document.getElementById('filtroMes');
+  const mesesDisponibles = [...new Set(todos.map(h=>h.fecha.slice(0,7)))].sort().reverse();
+  const mesSeleccionado = selMes.value;
+  selMes.innerHTML = '<option value="">Todos los meses</option>' + mesesDisponibles.map(m=>{
+    const [a,mm] = m.split('-');
+    const nombre = new Date(a, mm-1, 1).toLocaleDateString('es-AR',{month:'long', year:'numeric'});
+    return `<option value="${m}">${nombre}</option>`;
+  }).join('');
+  if(mesSeleccionado && mesesDisponibles.includes(mesSeleccionado)) selMes.value = mesSeleccionado;
+
+  const texto = (document.getElementById('filtroTexto').value || '').trim().toLowerCase();
+  const tipoFiltro = document.getElementById('filtroTipo').value;
+  const mesFiltro = selMes.value;
+
+  const filtrados = todos.filter(h=>{
+    if(tipoFiltro && h.tipo !== tipoFiltro) return false;
+    if(mesFiltro && !h.fecha.startsWith(mesFiltro)) return false;
+    if(texto && !(h.desc.toLowerCase().includes(texto) || h.detalle.toLowerCase().includes(texto))) return false;
+    return true;
+  });
+
+  const visibles = filtrados.slice(0, historialLimite);
+
+  const totalGastos = sum(filtrados.filter(h=>h.tipo==='gasto').map(h=>h.monto));
+  const totalIngresos = sum(filtrados.filter(h=>h.tipo==='ingreso').map(h=>h.monto));
+  document.getElementById('historialResumen').textContent =
+    filtrados.length ? `${filtrados.length} mov. · +${money(totalIngresos)} / -${money(totalGastos)}` : '';
+
+  document.getElementById('historialLista').innerHTML = visibles.length ? visibles.map(h=>{
     const signo = h.tipo==='ingreso' ? '+' : (h.tipo==='gasto' ? '-' : '');
     const cls = h.tipo==='ingreso' ? 'pos' : (h.tipo==='gasto' ? 'neg' : '');
-    return `<div class="row" style="cursor:pointer;" onclick="abrirEdicionMovimiento('${h.tipo}','${h.id}')"><div><div class="r-name">${h.desc}</div><div class="r-sub">${h.fecha} · tocar para editar</div></div><div class="r-amount num ${cls}">${signo}${money(h.monto)}</div></div>`;
-  }).join('') : '<div class="empty">Todavía no hay movimientos.</div>';
+    const sub = h.detalle ? `${h.fecha} · ${h.detalle}` : h.fecha;
+    return `<div class="row" style="cursor:pointer;" onclick="abrirEdicionMovimiento('${h.tipo}','${h.id}')"><div><div class="r-name">${h.desc}</div><div class="r-sub">${sub}</div></div><div class="r-amount num ${cls}">${signo}${money(h.monto)}</div></div>`;
+  }).join('') : '<div class="empty">No hay movimientos que coincidan.</div>';
+
+  const btnMas = document.getElementById('btnVerMas');
+  if(filtrados.length > historialLimite){
+    btnMas.style.display = 'block';
+    btnMas.textContent = `Ver más (${filtrados.length - historialLimite} restantes)`;
+  } else {
+    btnMas.style.display = 'none';
+  }
+}
+
+let historialLimite = 15;
+function verMasHistorial(){
+  historialLimite += 25;
+  renderMovimientos();
 }
 
 async function registrarGasto(){
@@ -966,7 +1032,7 @@ async function pagarCuota(id){
    publiques cambios (o dejala, el chequeo igual detecta el
    cambio de contenido).
    ------------------------------------------------------------ */
-const APP_VERSION = '2026.09.14b';
+const APP_VERSION = '2026.09.14c';
 
 let promptInstalacion = null;
 window.addEventListener('beforeinstallprompt', (e)=>{
