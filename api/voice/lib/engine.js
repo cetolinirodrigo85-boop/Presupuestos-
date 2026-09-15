@@ -175,9 +175,13 @@ function mesesParaObjetivo(actual, objetivo, aporteMensual, rendimientoAnualPct)
   return meses >= limite ? null : meses;
 }
 
+/* Formato pensado para que Siri lo lea bien en voz alta: dice
+   "pesos" en palabras, porque el símbolo $ se lee como "dólares"
+   en las voces en español. */
 function money(n) {
   const v = Math.round(n || 0);
-  return (v < 0 ? '-' : '') + '$' + Math.abs(v).toLocaleString('es-AR');
+  const abs = Math.abs(v).toLocaleString('es-AR');
+  return (v < 0 ? 'menos ' : '') + abs + ' pesos';
 }
 
 module.exports = {
