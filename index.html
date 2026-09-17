@@ -574,21 +574,55 @@ async function entrarConSesion(session){
   renderAll();
 }
 
+function mostrarErrorCarga(fallidas){
+  let box = document.getElementById('errorCargaBox');
+  if(!box){
+    box = document.createElement('div');
+    box.id = 'errorCargaBox';
+    box.style.cssText = 'background:var(--danger-dim);border:1px solid var(--danger);border-radius:var(--radius);padding:14px;margin-bottom:12px;font-size:13px;';
+    const wrap = document.querySelector('.wrap');
+    wrap.insertBefore(box, wrap.children[1]);
+  }
+  box.innerHTML = `<div style="font-weight:600;margin-bottom:6px;">No se pudieron leer tus datos</div>
+    <div class="faint" style="margin-bottom:8px;">Los datos están guardados, pero la app no tiene permiso para leerlos. Detalle:</div>
+    <div style="font-family:'IBM Plex Mono',monospace;font-size:11.5px;word-break:break-word;">${fallidas.slice(0,3).join('<br>')}</div>`;
+  box.style.display = 'block';
+}
+
+function ocultarErrorCarga(){
+  const box = document.getElementById('errorCargaBox');
+  if(box) box.style.display = 'none';
+}
+
 async function cargarDatos(){
   const uid_ = ownerId;
-  const [accounts, incomeSources, incomeTransactions, expenseCategories, expenses, recurringExpenses, installments, transfers, savingsGoals, investments] =
-    await Promise.all([
-      sb.from('accounts').select('*').eq('user_id', uid_),
-      sb.from('income_sources').select('*').eq('user_id', uid_),
-      sb.from('income_transactions').select('*').eq('user_id', uid_),
-      sb.from('expense_categories').select('*').eq('user_id', uid_),
-      sb.from('expenses').select('*').eq('user_id', uid_),
-      sb.from('recurring_expenses').select('*').eq('user_id', uid_),
-      sb.from('installments').select('*').eq('user_id', uid_),
-      sb.from('transfers').select('*').eq('user_id', uid_),
-      sb.from('savings_goals').select('*').eq('user_id', uid_),
-      sb.from('investments').select('*').eq('user_id', uid_),
-    ]);
+  const consultas = {
+    accounts: sb.from('accounts').select('*').eq('user_id', uid_),
+    incomeSources: sb.from('income_sources').select('*').eq('user_id', uid_),
+    incomeTransactions: sb.from('income_transactions').select('*').eq('user_id', uid_),
+    expenseCategories: sb.from('expense_categories').select('*').eq('user_id', uid_),
+    expenses: sb.from('expenses').select('*').eq('user_id', uid_),
+    recurringExpenses: sb.from('recurring_expenses').select('*').eq('user_id', uid_),
+    installments: sb.from('installments').select('*').eq('user_id', uid_),
+    transfers: sb.from('transfers').select('*').eq('user_id', uid_),
+    savingsGoals: sb.from('savings_goals').select('*').eq('user_id', uid_),
+    investments: sb.from('investments').select('*').eq('user_id', uid_),
+  };
+
+  const claves = Object.keys(consultas);
+  const resultados = await Promise.all(Object.values(consultas));
+
+  // Si alguna consulta falló, mostrarlo en vez de dejar todo vacío en silencio
+  const fallidas = [];
+  resultados.forEach((r,i)=>{ if(r.error) fallidas.push(`${claves[i]}: ${r.error.message}`); });
+  if(fallidas.length){
+    console.error('Errores al cargar:', fallidas);
+    mostrarErrorCarga(fallidas);
+  } else {
+    ocultarErrorCarga();
+  }
+
+  const [accounts, incomeSources, incomeTransactions, expenseCategories, expenses, recurringExpenses, installments, transfers, savingsGoals, investments] = resultados;
 
   DB = {
     accounts: (accounts.data||[]).map(a=>({ id:a.id, name:a.name, type:a.type,
@@ -1369,7 +1403,7 @@ async function pagarCuota(id){
    publiques cambios (o dejala, el chequeo igual detecta el
    cambio de contenido).
    ------------------------------------------------------------ */
-const APP_VERSION = '2026.09.15c';
+const APP_VERSION = '2026.09.15d';
 
 let promptInstalacion = null;
 window.addEventListener('beforeinstallprompt', (e)=>{
