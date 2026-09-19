@@ -201,6 +201,7 @@
     <div class="hero">
       <div class="label">Disponible real hoy</div>
       <div class="amount num" id="heroDisponible">$0</div>
+      <div class="faint" id="heroNota" style="margin-top:8px;display:none;"></div>
       <div class="breakdown">
         <div><div class="k">Total</div><div class="v num" id="brkTotal">$0</div></div>
         <div><div class="k">Comprometido</div><div class="v num" id="brkComprometido">$0</div></div>
@@ -420,7 +421,7 @@
       <div class="faint" style="margin-top:6px;">Agrega Efectivo, Mercado Pago, Banco Nación, Naranja X y Ualá. Solo crea las que te falten, con saldo en $0.</div>
     </div>
 
-    <div class="card">
+    <div class="card" id="cardGastosFijos">
       <div class="card-title">Gastos fijos mensuales <small class="util-link" onclick="openQuickForm('gastofijo')">+ agregar</small></div>
       <div class="faint" style="margin-bottom:10px;">Es lo que figura como "comprometido" cada mes, hasta que registrás el pago.</div>
       <div id="gastosFijosLista"></div>
@@ -444,6 +445,13 @@
       <button class="btn ghost" onclick="instalarApp()" style="margin-bottom:8px;">Instalar en la pantalla de inicio</button>
       <button class="btn ghost" onclick="buscarActualizacion()">Buscar actualizaciones</button>
       <div id="instalarAyuda" class="faint" style="margin-top:10px;"></div>
+    </div>
+
+    <div class="card">
+      <div class="card-title">Verificar saldos</div>
+      <div class="faint" style="margin-bottom:10px;">Compara el saldo guardado de cada cuenta contra el movimiento neto registrado. Sirve para detectar desajustes si borraste o editaste movimientos.</div>
+      <button class="btn ghost" onclick="verificarSaldos()">Verificar</button>
+      <div id="verificacionSaldos" style="margin-top:10px;"></div>
     </div>
 
     <div class="card">
@@ -476,11 +484,11 @@
     <svg viewBox="0 0 24 24"><path d="M4 7h16M4 12h16M4 17h10"/></svg>
     Movimientos
   </button>
-  <button data-tab="cuotas" onclick="goTab('cuotas')">
+  <button data-tab="cuotas" id="tabCuotas" onclick="goTab('cuotas')">
     <svg viewBox="0 0 24 24"><rect x="3" y="6" width="18" height="12" rx="2"/><path d="M3 10h18"/></svg>
     Cuotas
   </button>
-  <button data-tab="metas" onclick="goTab('metas')">
+  <button data-tab="metas" id="tabMetas" onclick="goTab('metas')">
     <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r="3"/></svg>
     Metas
   </button>
@@ -818,10 +826,29 @@ function setAmbito(a){
     b.classList.toggle('active', ['hogar','negocio'][i]===a));
 
   const esNegocio = a === 'negocio';
+
+  // Simuladores: cada ámbito tiene el suyo
   const simNeg = document.getElementById('simNegocioCard');
   const simHogar = document.getElementById('simHogarBloque');
   if(simNeg) simNeg.style.display = esNegocio ? 'block' : 'none';
   if(simHogar) simHogar.style.display = esNegocio ? 'none' : 'block';
+
+  // Cuotas, metas y gastos fijos son de la economía familiar, no del negocio
+  const tabCuotas = document.getElementById('tabCuotas');
+  const tabMetas = document.getElementById('tabMetas');
+  const cardFijos = document.getElementById('cardGastosFijos');
+  if(tabCuotas) tabCuotas.style.display = esNegocio ? 'none' : 'flex';
+  if(tabMetas) tabMetas.style.display = esNegocio ? 'none' : 'flex';
+  if(cardFijos) cardFijos.style.display = esNegocio ? 'none' : 'block';
+
+  // Si estaba parado en una pestaña que ya no aplica, volver a Inicio
+  if(esNegocio){
+    const activa = document.querySelector('.tabpage.active');
+    if(activa && (activa.id === 'page-cuotas' || activa.id === 'page-metas')){
+      goTab('inicio');
+      return;
+    }
+  }
 
   renderAll();
 }
@@ -883,6 +910,21 @@ function renderInicio(){
   const heroEl = document.getElementById('heroDisponible');
   heroEl.textContent = money(m.saldoDisponibleReal);
   heroEl.classList.toggle('neg', m.saldoDisponibleReal<0);
+
+  // Explicar el negativo: no es lo mismo estar endeudado que no haber cargado la plata
+  let notaHero = '';
+  if(m.saldoDisponibleReal < 0){
+    if(m.saldoTotal === 0){
+      notaHero = 'Tus cuentas están en $0. Si tenés plata, cargá el saldo real tocando la cuenta más abajo.';
+    } else {
+      notaHero = `Te faltan ${money(Math.abs(m.saldoDisponibleReal))} para cubrir lo que ya está comprometido este mes.`;
+    }
+  }
+  const heroNotaEl = document.getElementById('heroNota');
+  if(heroNotaEl){
+    heroNotaEl.textContent = notaHero;
+    heroNotaEl.style.display = notaHero ? 'block' : 'none';
+  }
   document.getElementById('brkTotal').textContent = money(m.saldoTotal);
   document.getElementById('brkComprometido').textContent = money(m.saldoComprometido);
   document.getElementById('brkInvertido').textContent = money(m.saldoInvertido);
@@ -1009,28 +1051,39 @@ function renderInicio(){
   document.getElementById('resAhorroPct').textContent = presupuesto.savingsPercent.toFixed(0)+'%';
 
   // ---- Tasa de ahorro ----
-  const tasa = presupuesto.income > 0 ? (presupuesto.savings / presupuesto.income) * 100 : 0;
+  const hayIngresos = presupuesto.income > 0;
+  const hayGastos = presupuesto.expenses > 0;
+  const tasa = hayIngresos ? (presupuesto.savings / presupuesto.income) * 100 : 0;
   const elPct = document.getElementById('tasaAhorroPct');
   const elBar = document.getElementById('tasaAhorroBar');
-  elPct.textContent = tasa.toFixed(0) + '%';
   document.getElementById('tasaAhorroMes').textContent = now.toLocaleDateString('es-AR',{month:'long'});
-  document.getElementById('tasaAhorroSub').textContent =
-    presupuesto.income > 0
-      ? `${money(presupuesto.savings)} de ${money(presupuesto.income)}`
-      : 'Todavía no registraste ingresos este mes';
 
-  elBar.style.width = Math.min(100, Math.max(0, tasa)) + '%';
-  elBar.className = 'bar-fill' + (tasa < 0 ? ' over' : (tasa < 10 ? ' warn' : ''));
-  elPct.className = 'num' + (tasa < 0 ? ' neg' : (tasa >= 20 ? ' pos' : ''));
+  if(!hayIngresos){
+    // Sin ingresos cargados no hay tasa que calcular: no es 0%, es que falta el dato
+    elPct.textContent = '—';
+    elPct.className = 'num muted';
+    elBar.style.width = '0%';
+    elBar.className = 'bar-fill';
+    document.getElementById('tasaAhorroSub').textContent = hayGastos
+      ? `Llevás ${money(presupuesto.expenses)} de gastos y ningún ingreso cargado`
+      : 'Todavía no cargaste movimientos este mes';
+    document.getElementById('tasaAhorroMsg').textContent =
+      'Registrá tus cobros para que la app pueda calcular cuánto estás ahorrando.';
+  } else {
+    elPct.textContent = tasa.toFixed(0) + '%';
+    document.getElementById('tasaAhorroSub').textContent = `${money(presupuesto.savings)} de ${money(presupuesto.income)}`;
+    elBar.style.width = Math.min(100, Math.max(0, tasa)) + '%';
+    elBar.className = 'bar-fill' + (tasa < 0 ? ' over' : (tasa < 10 ? ' warn' : ''));
+    elPct.className = 'num' + (tasa < 0 ? ' neg' : (tasa >= 20 ? ' pos' : ''));
 
-  let msgTasa;
-  if(presupuesto.income === 0) msgTasa = 'La tasa de ahorro es lo que más determina tu patrimonio a largo plazo — más que el rendimiento de cualquier inversión.';
-  else if(tasa < 0) msgTasa = 'Este mes estás gastando más de lo que entra. Mirá abajo qué categoría se lo está llevando.';
-  else if(tasa < 10) msgTasa = 'Por debajo del 10%. Con tus ingresos deberías poder bastante más — revisá las categorías variables.';
-  else if(tasa < 20) msgTasa = 'Vas bien. Subir del 20% acelera mucho tus objetivos.';
-  else if(tasa < 40) msgTasa = 'Muy buena tasa. Mantenerla es más valioso que buscar mejores rendimientos.';
-  else msgTasa = 'Tasa excelente. A este ritmo tu patrimonio crece principalmente por lo que aportás, no por el mercado.';
-  document.getElementById('tasaAhorroMsg').textContent = msgTasa;
+    let msgTasa;
+    if(tasa < 0) msgTasa = 'Este mes estás gastando más de lo que entra. Mirá abajo qué categoría se lo está llevando.';
+    else if(tasa < 10) msgTasa = 'Por debajo del 10%. Con tus ingresos deberías poder bastante más — revisá las categorías variables.';
+    else if(tasa < 20) msgTasa = 'Vas bien. Subir del 20% acelera mucho tus objetivos.';
+    else if(tasa < 40) msgTasa = 'Muy buena tasa. Mantenerla es más valioso que buscar mejores rendimientos.';
+    else msgTasa = 'Tasa excelente. A este ritmo tu patrimonio crece principalmente por lo que aportás, no por el mercado.';
+    document.getElementById('tasaAhorroMsg').textContent = msgTasa;
+  }
 
   // ---- Adónde se fue la plata ----
   const gastosMes = D.expenses.filter(e=>isSameMonth(e.occurredOn,year,month));
@@ -1112,12 +1165,15 @@ function renderMovimientos(){
 
   // ---- Historial con filtros ----
   const todos = [
-    ...DB.expenses.map(e=>({tipo:'gasto', id:e.id, fecha:e.occurredOn, monto:e.amount,
+    ...Dm.expenses.map(e=>({tipo:'gasto', id:e.id, fecha:e.occurredOn, monto:e.amount,
       desc: (DB.expenseCategories.find(c=>c.id===e.categoryId)||{}).name || 'Gasto',
       detalle: e.description || ''})),
-    ...DB.incomeTransactions.map(t=>({tipo:'ingreso', id:t.id, fecha:t.occurredOn, monto:t.amount,
+    ...Dm.incomeTransactions.map(t=>({tipo:'ingreso', id:t.id, fecha:t.occurredOn, monto:t.amount,
       desc:(DB.incomeSources.find(s=>s.id===t.incomeSourceId)||{}).name || 'Ingreso', detalle:''})),
-    ...DB.transfers.map(t=>({tipo:'transferencia', id:t.id, fecha:t.occurredOn, monto:t.amount,
+    ...DB.transfers.filter(t=>{
+        const c = DB.accounts.find(a=>a.id===t.fromAccountId);
+        return (c ? (c.scope||'hogar') : 'hogar') === ambitoActivo;
+      }).map(t=>({tipo:'transferencia', id:t.id, fecha:t.occurredOn, monto:t.amount,
       desc:'Transferencia', detalle:''}))
   ].sort((a,b)=> b.fecha.localeCompare(a.fecha));
 
@@ -1403,7 +1459,7 @@ async function pagarCuota(id){
    publiques cambios (o dejala, el chequeo igual detecta el
    cambio de contenido).
    ------------------------------------------------------------ */
-const APP_VERSION = '2026.09.15d';
+const APP_VERSION = '2026.09.19';
 
 let promptInstalacion = null;
 window.addEventListener('beforeinstallprompt', (e)=>{
@@ -1469,7 +1525,7 @@ function renderAjustes(){
   const lblVersion = document.getElementById('appVersionLabel');
   if(lblVersion) lblVersion.textContent = APP_VERSION + (yaInstalada() ? ' · instalada' : ' · en el navegador');
 
-  const fijos = DB.recurringExpenses.filter(r=>r.isActive);
+  const fijos = ambitoActivo==='hogar' ? DB.recurringExpenses.filter(r=>r.isActive) : [];
 
   const iconos = { efectivo:'💵', mercado_pago:'📱', banco:'🏦', billetera_virtual:'📲', inversion:'📈', otra:'💳' };
   document.getElementById('cuentasAjustes').innerHTML = DB.accounts.filter(a=>a.isActive && (a.scope||'hogar')===ambitoActivo).map(a=>`
@@ -1624,6 +1680,31 @@ async function abrirEdicionFuente(id){
     DB.incomeSources = DB.incomeSources.filter(x=>x.id!==id);
     closeQuickForm(); toast('Fuente eliminada'); renderAll();
   };
+}
+
+/* Compara el saldo guardado de cada cuenta contra el neto de sus
+   movimientos. No corrige nada solo: muestra la diferencia para
+   que decidas vos, porque el saldo inicial de cada cuenta no está
+   registrado como movimiento. */
+function verificarSaldos(){
+  const el = document.getElementById('verificacionSaldos');
+  const activas = DB.accounts.filter(a=>a.isActive);
+  if(!activas.length){ el.innerHTML = '<div class="empty">No hay cuentas para verificar.</div>'; return; }
+
+  el.innerHTML = activas.map(a=>{
+    const ingresos = sum(DB.incomeTransactions.filter(t=>t.accountId===a.id).map(t=>t.amount));
+    const gastos = sum(DB.expenses.filter(e=>e.accountId===a.id).map(e=>e.amount));
+    const entra = sum(DB.transfers.filter(t=>t.toAccountId===a.id).map(t=>t.amount));
+    const sale = sum(DB.transfers.filter(t=>t.fromAccountId===a.id).map(t=>t.amount));
+    const neto = round2(ingresos - gastos + entra - sale);
+    const inicial = round2(a.balanceTotal - neto);
+
+    return `<div class="row">
+      <div><div class="r-name">${a.name}</div>
+        <div class="r-sub">movimientos: ${neto>=0?'+':''}${money(neto)} · saldo inicial implícito: ${money(inicial)}</div></div>
+      <div class="r-amount num">${money(a.balanceTotal)}</div>
+    </div>`;
+  }).join('') + `<div class="faint" style="margin-top:10px;">El "saldo inicial implícito" es la plata que tenía la cuenta antes del primer movimiento registrado. Si ese número no tiene sentido (por ejemplo, es negativo y nunca tuviste deuda ahí), hay un desajuste: tocá la cuenta y corregí el saldo a mano.</div>`;
 }
 
 async function reiniciarTodo(){
